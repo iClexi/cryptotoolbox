@@ -1,0 +1,5 @@
+{
+  "name": "Hash Toolkit & Decoder",
+  "description": "Herramienta avanzada para verificar la integridad de archivos y decodificar hashes MD5, SHA1 y SHA256 mediante ataques de diccionario y búsqueda global.",
+  "requestFramePermissions": []
+}
