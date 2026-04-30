@@ -4,7 +4,7 @@
  */
 
 import { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, ReactNode, ChangeEvent, FormEvent } from 'react';
-import { Shield, Clipboard, Check, Search, AlertCircle, XCircle, Download, Zap, Globe, Hash, Unlock, Type, X, Copy, Music, Trophy, Play, ChevronRight, Sun, Moon, Medal, LogOut, User, Fingerprint, Sparkles, Filter, ArrowUpDown, Bell, Settings, Palette, Database, MessageSquare, Send, Eye, EyeOff, ShieldCheck, ShieldAlert, Calendar, Phone, Menu, File, Edit2, Trash2, BookOpen, Users, Plus, CheckCircle2, Cpu, Award, Activity as ActivityIcon, Code, Star, Mail, RotateCcw, FileSearch } from 'lucide-react';
+import { Shield, Clipboard, Check, Search, AlertCircle, Download, Zap, Globe, Hash, Unlock, Type, X, Copy, Trophy, Play, ChevronRight, Sun, Moon, LogOut, User, Fingerprint, Sparkles, Filter, ArrowUpDown, Bell, Settings, Palette, Database, MessageSquare, Send, Eye, EyeOff, ShieldCheck, ShieldAlert, Calendar, Phone, Menu, File, Edit2, Trash2, BookOpen, Users, Plus, CheckCircle2, Cpu, Award, Activity as ActivityIcon, Code, Star, Mail, RotateCcw, FileSearch } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
 import CryptoJS from 'crypto-js';
@@ -229,7 +229,7 @@ const AssignmentBriefPopup = ({ isOpen, onClose, isDarkMode }: { isOpen: boolean
   </AnimatePresence>
 );
 
-const ProfileSelector = ({ onSelect, onBackToQuiz, isDarkMode }: { onSelect: (profile: UserProfile) => void, onBackToQuiz: () => void, isDarkMode: boolean }) => {
+const ProfileSelector = ({ onSelect, isDarkMode }: { onSelect: (profile: UserProfile) => void, isDarkMode: boolean }) => {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [pin, setPin] = useState('');
@@ -287,14 +287,6 @@ const ProfileSelector = ({ onSelect, onBackToQuiz, isDarkMode }: { onSelect: (pr
         animate={{ opacity: 1, y: 0 }}
         className={`max-w-md w-full border rounded-3xl p-8 shadow-2xl relative transition-colors duration-500 ${isDarkMode ? 'bg-[#111] border-white/10' : 'bg-white border-black/5'}`}
       >
-        <button
-          onClick={onBackToQuiz}
-          className={`absolute top-4 left-4 transition-colors flex items-center gap-1 text-sm ${isDarkMode ? 'text-white/40 hover:text-white' : 'text-gray-400 hover:text-gray-900'}`}
-        >
-          <ChevronRight className="w-4 h-4 rotate-180" />
-          Volver al Quiz
-        </button>
-
         <div className="text-center mb-8 mt-4">
           <div className={`inline-flex p-4 rounded-2xl mb-4 ${isDarkMode ? 'bg-indigo-500/10' : 'bg-indigo-50'}`}>
             <User className={`w-10 h-10 ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`} />
@@ -1393,221 +1385,8 @@ const COMMON_PASSWORDS = [
   '1234567', '1234567890', '000000', '654321', 'pass123', 'letmein', 'access', 'oracle', 'cisco', 'microsoft'
 ];
 
-// --- MUSIC QUIZ GATEKEEPER ---
-const QUIZ_QUESTIONS = [
-  {
-    id: 1,
-    question: "¿Cuántos sostenidos (#) tiene la armadura de clave de Mi Mayor (E Major)?",
-    options: ["2 sostenidos", "3 sostenidos", "4 sostenidos", "5 sostenidos"],
-    correct: 2
-  },
-  {
-    id: 2,
-    question: "En la tonalidad de Sol Mayor (G Major), ¿cuál es el acorde que corresponde al cuarto grado (IV)?",
-    options: ["Do Mayor (C)", "Re Mayor (D)", "La Menor (Am)", "Fa# Disminuido"],
-    correct: 0
-  },
-  {
-    id: 3,
-    question: "Si la nota fundamental es un Do (C2), ¿cuál es el primer armónico que suena (también llamado segunda parcial)?",
-    options: ["Un Sol (G3)", "Un Mi (E3)", "Un Do una octava arriba (C3)", "Un Si bemol (Bb3)"],
-    correct: 2
-  },
-  {
-    id: 4,
-    question: "¿Cuál es el orden correcto de los primeros tres bemoles (b) que aparecen en las armaduras de clave?",
-    options: ["Si, Mi, La", "Fa, Do, Sol", "Si, La, Re", "Mi, Si, La"],
-    correct: 0
-  },
-  {
-    id: 5,
-    question: "¿Cuál es el acorde de dominante (V7) en la tonalidad de La Menor (Am)?",
-    options: ["Re menor 7 (Dm7)", "Sol Mayor 7 (G7)", "Mi dominante 7 (E7)", "Fa Mayor 7 (Fmaj7)"],
-    correct: 2
-  }
-];
-
-const MusicGate = ({ onPass, isDarkMode }: { onPass: (method: 'quiz' | 'skip') => void, isDarkMode: boolean }) => {
-  const [showIntro, setShowIntro] = useState(true);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [selectedOption, setSelectedOption] = useState<number | null>(null);
-  const [error, setError] = useState(false);
-  const [isFinished, setIsFinished] = useState(false);
-  const [isSkipping, setIsSkipping] = useState(false);
-
-  const handleAnswer = () => {
-    if (selectedOption === QUIZ_QUESTIONS[currentStep].correct) {
-      if (currentStep < QUIZ_QUESTIONS.length - 1) {
-        setCurrentStep(prev => prev + 1);
-        setSelectedOption(null);
-        setError(false);
-      } else {
-        setIsFinished(true);
-        setTimeout(() => onPass('quiz'), 2500);
-      }
-    } else {
-      setError(true);
-      setTimeout(() => {
-        setCurrentStep(0);
-        setSelectedOption(null);
-        setError(false);
-      }, 1000);
-    }
-  };
-
-  const handleSkip = () => {
-    setIsSkipping(true);
-    setTimeout(() => onPass('skip'), 3000);
-  };
-
-  return (
-    <div className={`fixed inset-0 z-[9999] flex items-center justify-center p-4 font-sans transition-colors duration-500 ${isDarkMode ? 'bg-[#050505]' : 'bg-gray-100'}`}>
-      <div className={`max-w-md w-full border rounded-2xl p-8 shadow-2xl relative overflow-hidden transition-colors duration-500 ${isDarkMode ? 'bg-[#111] border-white/10' : 'bg-white border-black/5'}`}>
-        {/* Background Glow */}
-        <div className={`absolute -top-24 -right-24 w-48 h-48 blur-[100px] rounded-full ${isDarkMode ? 'bg-emerald-500/10' : 'bg-emerald-500/5'}`} />
-        <div className={`absolute -bottom-24 -left-24 w-48 h-48 blur-[100px] rounded-full ${isDarkMode ? 'bg-blue-500/10' : 'bg-blue-500/5'}`} />
-
-        {isSkipping ? (
-          <div className="text-center py-12 relative z-10 animate-in fade-in zoom-in duration-500">
-            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${isDarkMode ? 'bg-amber-500/20' : 'bg-amber-50'}`}>
-              <Zap className={`w-10 h-10 ${isDarkMode ? 'text-amber-400' : 'text-amber-500'}`} />
-            </div>
-            <h2 className={`text-2xl font-bold mb-4 tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Eres un pollito de colores...</h2>
-            <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-white/60' : 'text-gray-500'}`}>
-              Y me lo esperaba, pero igual puedes entrar a la página.
-            </p>
-            <div className="mt-8 flex justify-center">
-              <div className={`w-6 h-6 border-2 rounded-full animate-spin ${isDarkMode ? 'border-amber-500/30 border-t-amber-500' : 'border-amber-200 border-t-amber-500'}`} />
-            </div>
-          </div>
-        ) : showIntro ? (
-          <div className="text-center py-12 relative z-10 animate-in fade-in zoom-in duration-500">
-            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${isDarkMode ? 'bg-emerald-500/20' : 'bg-emerald-50'}`}>
-              <Music className={`w-10 h-10 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-500'}`} />
-            </div>
-            <h2 className={`text-2xl font-bold mb-4 tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Quizz para el profesor, demuestre sus conocimientos musicales al frente de todos sus estudiantes</h2>
-            <p className={`text-sm leading-relaxed mb-8 ${isDarkMode ? 'text-white/60' : 'text-gray-500'}`}>
-              Demuestra tus conocimientos musicales para acceder al sistema.
-            </p>
-            <div className="space-y-4">
-              <button 
-                onClick={() => setShowIntro(false)}
-                className="w-full py-4 rounded-xl bg-emerald-600 text-white font-bold text-sm hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-600/20 active:scale-95"
-              >
-                Aceptar Desafío
-              </button>
-              <button 
-                onClick={handleSkip}
-                className={`w-full py-3 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all ${
-                  isDarkMode ? 'text-white/30 border-white/10 hover:text-white/60 hover:bg-white/5' : 'text-gray-400 border-black/5 hover:text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                Soy un pollito de colores
-              </button>
-            </div>
-          </div>
-        ) : !isFinished ? (
-          <div className="relative z-10">
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isDarkMode ? 'bg-emerald-500/20' : 'bg-emerald-50'}`}>
-                   <Music className={`w-5 h-5 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`} />
-                </div>
-                <div>
-                  <h2 className={`font-bold text-xl tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Prueba de Acceso</h2>
-                  <p className={`text-xs uppercase tracking-widest font-medium ${isDarkMode ? 'text-white/40' : 'text-gray-400'}`}>Nivel: Erudito Musical</p>
-                </div>
-              </div>
-              <button
-                onClick={handleSkip}
-                className={`text-[10px] uppercase tracking-widest font-bold border px-2 py-1 rounded transition-all ${
-                  isDarkMode ? 'text-white/30 border-white/10 hover:text-white/60 hover:bg-white/5' : 'text-gray-400 border-black/5 hover:text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                Soy un pollito de colores
-              </button>
-            </div>
-
-            <div className="mb-8">
-              <div className="flex justify-between items-end mb-2">
-                <span className={`font-mono text-xs ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>Pregunta {currentStep + 1}/5</span>
-                <div className="flex gap-1">
-                  {QUIZ_QUESTIONS.map((_, i) => (
-                    <div
-                      key={i}
-                      className={`h-1 w-4 rounded-full transition-all duration-300 ${
-                        i <= currentStep ? 'bg-emerald-500' : isDarkMode ? 'bg-white/10' : 'bg-gray-100'
-                      }`}
-                    />
-                  ))}
-                </div>
-              </div>
-              <h3 className={`text-lg font-medium leading-snug ${isDarkMode ? 'text-white' : 'text-gray-800'}`}>
-                {QUIZ_QUESTIONS[currentStep].question}
-              </h3>
-            </div>
-
-            <div className="space-y-3 mb-8">
-              {QUIZ_QUESTIONS[currentStep].options.map((option, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => setSelectedOption(idx)}
-                  className={`w-full text-left p-4 rounded-xl border transition-all duration-200 group ${
-                    selectedOption === idx
-                      ? isDarkMode ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                      : isDarkMode ? 'bg-white/5 border-white/5 text-white/60 hover:bg-white/10 hover:border-white/10' : 'bg-gray-50 border-black/5 text-gray-500 hover:bg-gray-100 hover:border-gray-200'
-                  } ${error && selectedOption === idx ? 'bg-red-500/10 border-red-500/50 text-red-400 animate-shake' : ''}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">{option}</span>
-                    <ChevronRight className={`w-4 h-4 transition-transform ${selectedOption === idx ? 'translate-x-1' : 'opacity-0'}`} />
-                  </div>
-                </button>
-              ))}
-            </div>
-
-            <button
-              disabled={selectedOption === null || error}
-              onClick={handleAnswer}
-              className="w-full py-4 font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 bg-white text-black hover:bg-gray-200"
-            >
-              {error ? (
-                <>
-                  <XCircle className="w-5 h-5" />
-                  <span>ERROR - REINICIANDO</span>
-                </>
-              ) : (
-                <>
-                  <span>SIGUIENTE</span>
-                  <Play className="w-4 h-4 fill-current" />
-                </>
-              )}
-            </button>
-
-            <p className={`text-center mt-6 text-[10px] uppercase tracking-widest ${isDarkMode ? 'text-white/20' : 'text-gray-400'}`}>
-              Falla una y volverás al inicio. Solo la perfección otorga acceso.
-            </p>
-          </div>
-        ) : (
-          <div className="text-center py-12 relative z-10 animate-in fade-in zoom-in duration-500">
-            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_50px_rgba(16,185,129,0.4)] ${isDarkMode ? 'bg-emerald-500' : 'bg-emerald-600'}`}>
-              <Trophy className={`w-10 h-10 ${isDarkMode ? 'text-black' : 'text-white'}`} />
-            </div>
-            <h2 className={`text-2xl font-bold mb-2 tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>¡Eres un pollito amarillo!</h2>
-            <p className={`font-mono text-sm uppercase tracking-widest ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>Te has ganado tu lugar</p>
-            <div className="mt-8 flex justify-center">
-              <div className={`w-8 h-8 border-2 rounded-full animate-spin ${isDarkMode ? 'border-emerald-500/30 border-t-emerald-500' : 'border-emerald-200 border-t-emerald-500'}`} />
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
 export default function App() {
-  const [hasPassedQuiz, setHasPassedQuiz] = useState<boolean | null>(null);
-  const [entryMethod, setEntryMethod] = useState<'quiz' | 'skip' | null>(null);
+  const [isSessionLoading, setIsSessionLoading] = useState(true);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [currentThemeId, setCurrentThemeId] = useState('dark');
@@ -1623,11 +1402,12 @@ export default function App() {
   , [currentThemeId]);
 
   useEffect(() => {
-    const passed = localStorage.getItem('crypto_toolbox_quiz_passed');
-    const method = localStorage.getItem('crypto_toolbox_entry_method') as 'quiz' | 'skip' | null;
     const savedTheme = localStorage.getItem('crypto_toolbox_theme');
     const savedPrefs = localStorage.getItem('crypto_toolbox_notifications');
     const assignmentPopupSeen = localStorage.getItem('crypto_toolbox_assignment_popup_seen');
+
+    localStorage.removeItem('crypto_toolbox_quiz_passed');
+    localStorage.removeItem('crypto_toolbox_entry_method');
 
     if (assignmentPopupSeen !== 'true') {
       setShowAssignmentPopup(true);
@@ -1642,27 +1422,27 @@ export default function App() {
       setNotificationPrefs(JSON.parse(savedPrefs));
     }
 
-    const fallbackPassed = passed === 'true';
-
     (async () => {
+      let authenticated = false;
+
       try {
         const res = await fetch('/api/session');
         const data = await res.json();
         if (res.ok && data.authenticated && data.user) {
           setUserProfile(data.user);
           localStorage.setItem('crypto_toolbox_profile', JSON.stringify(data.user));
-          setHasPassedQuiz(true);
-          setEntryMethod(method || 'skip');
-          return;
+          authenticated = true;
         }
       } catch (err) {
         console.error('Session check failed:', err);
       }
 
-      localStorage.removeItem('crypto_toolbox_profile');
-      setUserProfile(null);
-      setHasPassedQuiz(fallbackPassed);
-      setEntryMethod(fallbackPassed ? (method || 'quiz') : null);
+      if (!authenticated) {
+        localStorage.removeItem('crypto_toolbox_profile');
+        setUserProfile(null);
+      }
+
+      setIsSessionLoading(false);
     })();
   }, []);
 
@@ -1683,21 +1463,10 @@ export default function App() {
     setUserProfile(profile);
   };
 
-  const handleQuizPass = (method: 'quiz' | 'skip') => {
-    localStorage.setItem('crypto_toolbox_quiz_passed', 'true');
-    localStorage.setItem('crypto_toolbox_entry_method', method);
-    setHasPassedQuiz(true);
-    setEntryMethod(method);
-  };
-
   const handleLogout = () => {
     fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
     localStorage.removeItem('crypto_toolbox_profile');
-    localStorage.removeItem('crypto_toolbox_quiz_passed');
-    localStorage.removeItem('crypto_toolbox_entry_method');
     setUserProfile(null);
-    setHasPassedQuiz(false);
-    setEntryMethod(null);
   };
 
   const handleThemeChange = (themeId: string) => {
@@ -1716,7 +1485,7 @@ export default function App() {
     setShowAssignmentPopup(false);
   };
 
-  if (hasPassedQuiz === null) return null;
+  if (isSessionLoading) return null;
 
   return (
     <div className={isDarkMode ? 'dark' : ''} style={{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', minHeight: '100vh' }}>
@@ -1726,24 +1495,13 @@ export default function App() {
         onClose={handleCloseAssignmentPopup}
         isDarkMode={isDarkMode}
       />
-      {!hasPassedQuiz ? (
-        <MusicGate 
-          onPass={handleQuizPass} 
-          isDarkMode={isDarkMode} 
-        />
-      ) : !userProfile ? (
+      {!userProfile ? (
         <ProfileSelector 
           onSelect={handleProfileComplete} 
-          onBackToQuiz={() => {
-            setHasPassedQuiz(false);
-            localStorage.removeItem('crypto_toolbox_quiz_passed');
-            localStorage.removeItem('crypto_toolbox_entry_method');
-          }} 
           isDarkMode={isDarkMode}
         />
       ) : (
         <MainApp
-          entryMethod={entryMethod}
           isDarkMode={isDarkMode}
           currentTheme={currentTheme}
           userProfile={userProfile}
@@ -1752,11 +1510,6 @@ export default function App() {
           onThemeChange={handleThemeChange}
           onNotificationPrefsChange={handleNotificationPrefsChange}
           onProfileUpdate={setUserProfile}
-          onRetakeQuiz={() => {
-            setHasPassedQuiz(false);
-            localStorage.removeItem('crypto_toolbox_quiz_passed');
-            localStorage.removeItem('crypto_toolbox_entry_method');
-          }}
         />
       )}
     </div>
@@ -2169,8 +1922,7 @@ const ReputationSystem = ({ userProfile, isDarkMode }: { userProfile: UserProfil
   );
 };
 
-function MainApp({ entryMethod, isDarkMode, currentTheme, userProfile, notificationPrefs, onLogout, onThemeChange, onNotificationPrefsChange, onRetakeQuiz, onProfileUpdate }: {
-  entryMethod: 'quiz' | 'skip' | null,
+function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onLogout, onThemeChange, onNotificationPrefsChange, onProfileUpdate }: {
   isDarkMode: boolean,
   currentTheme: ThemeConfig,
   userProfile: UserProfile,
@@ -2178,7 +1930,6 @@ function MainApp({ entryMethod, isDarkMode, currentTheme, userProfile, notificat
   onLogout: () => void,
   onThemeChange: (themeId: string) => void,
   onNotificationPrefsChange: (prefs: NotificationPrefs) => void,
-  onRetakeQuiz: () => void,
   onProfileUpdate: (profile: UserProfile) => void
 }) {
   const [activeTab, setActiveTab] = useState<'home' | 'verify' | 'generate' | 'decode' | 'activity' | 'file' | 'explorer' | 'chat' | 'wiki' | 'messages' | 'visualizer' | 'reputation'>('home');
@@ -2963,15 +2714,6 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
         </button>
       </div>
 
-      {/* Gold Medal for Quiz Winners */}
-      {entryMethod === 'quiz' && (
-        <div className="fixed top-6 left-6 z-50 animate-bounce" title="Pollito de Color - Ganaste tu lugar">
-          <div className="w-12 h-12 bg-amber-400 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(251,191,36,0.5)] border-2 border-amber-600">
-            <Medal className="w-7 h-7 text-amber-800" />
-          </div>
-        </div>
-      )}
-
       <div className="max-w-4xl mx-auto px-6 py-12">
         {/* Header */}
         <header className="mb-12 text-center relative">
@@ -3124,17 +2866,10 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                 { id: 'wiki', label: 'Wiki Algoritmos', icon: BookOpen, desc: 'Información técnica sobre algoritmos de hash.', color: '#14b8a6' },
                 { id: 'visualizer', label: 'Visualizador', icon: Cpu, desc: 'Observa paso a paso cómo se generan las rondas de un hash.', color: '#f97316' },
                 { id: 'reputation', label: 'Reputación', icon: Trophy, desc: 'Tu rango y puntos en la red de expertos en seguridad.', color: '#84cc16' },
-                { id: 'retake_quiz', label: 'Repetir Quiz', icon: Music, desc: 'Vuelve a realizar el desafío musical de entrada.', color: '#f43f5e' },
               ].map((module) => (
                 <button
                   key={module.id}
-                  onClick={() => {
-                    if (module.id === 'retake_quiz') {
-                      onRetakeQuiz();
-                    } else {
-                      setActiveTab(module.id as any);
-                    }
-                  }}
+                  onClick={() => setActiveTab(module.id as any)}
                   className="group flex flex-col items-start p-6 rounded-3xl border shadow-sm hover:shadow-xl transition-all duration-300 text-left relative overflow-hidden"
                   style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}
                 >
