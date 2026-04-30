@@ -1,29 +1,35 @@
-import Database from "better-sqlite3";
-const db = new Database('hashes.db');
+const baseUrl = process.env.APP_URL || "http://localhost:3000";
+const username = `points_test_${Date.now()}`;
+
 try {
-  const userId = 2; // MichaelRobles20250845
-  const pointsToAdd = 100;
-  
-  const user = db.prepare("SELECT points, role FROM users WHERE id = ?").get(userId);
-  console.log("User before update:", user);
+  const login = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username,
+      email: `${username}@example.com`,
+      avatarSeed: username,
+      pin: "1234",
+    }),
+  });
 
-  const newPoints = (user.points || 0) + pointsToAdd;
-  const level = Math.floor((1 + Math.sqrt(1 + 8 * newPoints / 50)) / 2);
-  let newRank = 'Novice';
-  if (user.role === 'admin') {
-    newRank = 'System Administrator';
-  } else {
-    if (newPoints >= 5000) newRank = 'Elite Cipher';
-    else if (newPoints >= 2000) newRank = 'Root Admin';
-    else if (newPoints >= 1000) newRank = 'Cipher Master';
-    else if (newPoints >= 500) newRank = 'Security Analyst';
-    else if (newPoints >= 200) newRank = 'Junior Operator';
-  }
+  const cookie = login.headers.get("set-cookie")?.split(";")[0];
+  const loginData = await login.json();
+  console.log("Login response:", login.status, loginData);
 
-  db.prepare("UPDATE users SET points = ?, rank = ? WHERE id = ?").run(newPoints, newRank, userId);
-  
-  const userAfter = db.prepare("SELECT points, rank FROM users WHERE id = ?").get(userId);
-  console.log("User after update:", userAfter);
-} catch (e) {
-  console.error("Error:", e);
+  if (!login.ok || !cookie) throw new Error("Could not create test session");
+
+  const points = await fetch(`${baseUrl}/api/users/points`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: cookie,
+    },
+    body: JSON.stringify({ userId: loginData.user.id, pointsToAdd: 10 }),
+  });
+
+  console.log("Points response:", points.status, await points.json());
+} catch (error) {
+  console.error("Error:", error);
+  process.exitCode = 1;
 }

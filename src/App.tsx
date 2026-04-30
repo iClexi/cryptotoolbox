@@ -1030,7 +1030,6 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
     if (!newMessage.trim() || !socket || !selectedUser) return;
 
     socket.emit('send_dm', {
-      senderId: userProfile.id,
       receiverId: selectedUser.id,
       content: newMessage
     });
@@ -1119,8 +1118,7 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
               onClose={() => setUserToDelete(null)}
               onConfirm={() => {
                 fetch(`/api/admin/users/${userToDelete.id}`, {
-                  method: 'DELETE',
-                  headers: { 'x-admin-id': userProfile.id.toString() }
+                  method: 'DELETE'
                 }).then(res => {
                   if (res.ok) {
                     toast.success('Usuario eliminado');
@@ -1521,20 +1519,15 @@ export default function App() {
     verificationMatch: true
   });
 
-  const currentTheme = useMemo(() => 
+  const currentTheme = useMemo(() =>
     THEMES.find(t => t.id === currentThemeId) || THEMES[0]
   , [currentThemeId]);
 
   useEffect(() => {
     const passed = localStorage.getItem('crypto_toolbox_quiz_passed');
     const method = localStorage.getItem('crypto_toolbox_entry_method') as 'quiz' | 'skip' | null;
-    const profile = localStorage.getItem('crypto_toolbox_profile');
     const savedTheme = localStorage.getItem('crypto_toolbox_theme');
     const savedPrefs = localStorage.getItem('crypto_toolbox_notifications');
-    
-    if (profile) {
-      setUserProfile(JSON.parse(profile));
-    }
 
     if (savedTheme) {
       setCurrentThemeId(savedTheme);
@@ -1545,12 +1538,28 @@ export default function App() {
       setNotificationPrefs(JSON.parse(savedPrefs));
     }
 
-    if (passed === 'true') {
-      setHasPassedQuiz(true);
-      setEntryMethod(method || 'quiz');
-    } else {
-      setHasPassedQuiz(false);
-    }
+    const fallbackPassed = passed === 'true';
+
+    (async () => {
+      try {
+        const res = await fetch('/api/session');
+        const data = await res.json();
+        if (res.ok && data.authenticated && data.user) {
+          setUserProfile(data.user);
+          localStorage.setItem('crypto_toolbox_profile', JSON.stringify(data.user));
+          setHasPassedQuiz(true);
+          setEntryMethod(method || 'skip');
+          return;
+        }
+      } catch (err) {
+        console.error('Session check failed:', err);
+      }
+
+      localStorage.removeItem('crypto_toolbox_profile');
+      setUserProfile(null);
+      setHasPassedQuiz(fallbackPassed);
+      setEntryMethod(fallbackPassed ? (method || 'quiz') : null);
+    })();
   }, []);
 
   useEffect(() => {
@@ -1578,6 +1587,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
     localStorage.removeItem('crypto_toolbox_profile');
     localStorage.removeItem('crypto_toolbox_quiz_passed');
     localStorage.removeItem('crypto_toolbox_entry_method');
@@ -2391,8 +2401,7 @@ function MainApp({ entryMethod, isDarkMode, currentTheme, userProfile, notificat
     const targetHash = hash.toLowerCase();
     try {
       const res = await fetch(`/api/admin/hashes/${targetHash}`, {
-        method: 'DELETE',
-        headers: { 'x-admin-id': userProfile.id.toString() }
+        method: 'DELETE'
       });
       if (res.ok) {
         toast.success('Hash eliminado de la base de datos');
@@ -2410,9 +2419,10 @@ function MainApp({ entryMethod, isDarkMode, currentTheme, userProfile, notificat
 
   const handleDeleteValue = async (value: string) => {
     try {
-      const res = await fetch(`/api/admin/hashes/value/${encodeURIComponent(value)}`, {
+      const res = await fetch('/api/admin/hash-values', {
         method: 'DELETE',
-        headers: { 'x-admin-id': userProfile.id.toString() }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value })
       });
       if (res.ok) {
         toast.success('Valor y hashes eliminados');
@@ -2437,8 +2447,7 @@ function MainApp({ entryMethod, isDarkMode, currentTheme, userProfile, notificat
   const handleDeleteActivity = async (id: number) => {
     try {
       const res = await fetch(`/api/admin/activities/${id}`, {
-        method: 'DELETE',
-        headers: { 'x-admin-id': userProfile.id.toString() }
+        method: 'DELETE'
       });
       if (res.ok) {
         toast.success('Actividad eliminada');
@@ -2450,7 +2459,7 @@ function MainApp({ entryMethod, isDarkMode, currentTheme, userProfile, notificat
   };
 
   useEffect(() => {
-    const newSocket = io();
+    const newSocket = io({ transports: ['websocket'], withCredentials: true });
     
     // Authenticate socket connection
     if (userProfile?.username) {
@@ -2783,8 +2792,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                               console.log("[ADMIN] Iniciando petición de limpieza de base de datos...");
                               try {
                                 const res = await fetch('/api/admin/hashes', {
-                                  method: 'DELETE',
-                                  headers: { 'x-admin-id': userProfile.id.toString() }
+                                  method: 'DELETE'
                                 });
                                 if (res.ok) {
                                   console.log("[ADMIN] Petición de limpieza exitosa");
@@ -4048,8 +4056,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
 
   const handleDelete = async (id: number) => {
     fetch(`/api/apps/${id}`, {
-      method: 'DELETE',
-      headers: { 'x-admin-id': userProfile.id.toString() }
+      method: 'DELETE'
     }).then(res => {
       if (res.ok) {
         toast.success('Aplicación eliminada');
@@ -4065,7 +4072,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
     const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...app, adminId: userProfile.id })
+      body: JSON.stringify(app)
     });
     if (res.ok) {
       toast.success(app.id ? 'Aplicación actualizada' : 'Aplicación creada');
@@ -4453,8 +4460,7 @@ function AlgorithmWiki({ userProfile }: { userProfile: any }) {
   const handleDelete = async (id: number) => {
     try {
       const response = await fetch(`/api/wiki/${id}`, {
-        method: 'DELETE',
-        headers: { 'x-admin-id': userProfile.id.toString() }
+        method: 'DELETE'
       });
       if (response.ok) {
         toast.success('Algoritmo eliminado');
@@ -4472,7 +4478,7 @@ function AlgorithmWiki({ userProfile }: { userProfile: any }) {
       const response = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...algo, adminId: userProfile.id })
+        body: JSON.stringify(algo)
       });
       if (response.ok) {
         toast.success(algo.id ? 'Algoritmo actualizado' : 'Algoritmo creado');

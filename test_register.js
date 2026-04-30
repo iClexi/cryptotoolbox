@@ -1,18 +1,20 @@
+const baseUrl = process.env.APP_URL || "http://localhost:3000";
+const username = `register_test_${Date.now()}`;
 
-import fetch from 'node-fetch';
+try {
+  const res = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username,
+      email: `${username}@example.com`,
+      avatarSeed: username,
+      pin: "1234",
+    }),
+  });
 
-async function testRegister() {
-  try {
-    const res = await fetch('http://localhost:3000/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'MichaelRobles20250845', pin: '1234' })
-    });
-    const data = await res.json();
-    console.log('Register Response:', data);
-  } catch (err) {
-    console.error('Error:', err);
-  }
+  console.log("Register response:", res.status, await res.json());
+} catch (error) {
+  console.error("Error:", error);
+  process.exitCode = 1;
 }
-
-testRegister();

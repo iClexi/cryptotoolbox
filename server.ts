@@ -1,844 +1,1191 @@
+import "dotenv/config";
 import express from "express";
+import type { NextFunction, Request, Response } from "express";
+import helmet from "helmet";
 import path from "path";
 import { fileURLToPath } from "url";
-import Database from "better-sqlite3";
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { createServer } from "http";
+import { Pool } from "pg";
+import type { QueryResultRow } from "pg";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
-  const app = express();
-  const httpServer = createServer(app);
-  const io = new Server(httpServer, {
-    cors: { origin: "*" }
-  });
+const isProduction = process.env.NODE_ENV === "production";
+const PORT = Number(process.env.PORT || 3000);
+const SESSION_COOKIE = "ct_session";
+const SESSION_TTL_SECONDS = 60 * 60 * 8;
+const HASH_RE = /^(?:[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64})$/i;
+const USERNAME_RE = /^[A-Za-z0-9_. -]{3,40}$/;
+const PIN_RE = /^\d{4}$/;
+const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
+const UNSAFE_TEXT_RE = /(?:<|>|\u0000|javascript:|data:text|file:|(?:^|[\\/])\.\.(?:[\\/]|$)|(?:^|[\\/])etc[\\/]passwd|[a-zA-Z]:[\\/]|WEB-INF[\\/\\]|--\s*$|;\s*(?:drop|select|insert|update|delete)\b)/i;
 
-  const PORT = 3000;
+const configuredSessionSecret = process.env.SESSION_SECRET?.trim();
+const sessionSecret = configuredSessionSecret || (isProduction ? "" : randomBytes(32).toString("hex"));
 
-  app.use(express.json());
+if (!sessionSecret) {
+  throw new Error("SESSION_SECRET is required when NODE_ENV=production");
+}
 
-  // Base de datos SQLite
-  const db = new Database('hashes.db');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS hash_cache (
-      hash TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE,
-      email TEXT,
-      pin TEXT,
-      avatar_seed TEXT,
-      role TEXT DEFAULT 'user',
-      points INTEGER DEFAULT 0,
-      rank TEXT DEFAULT 'Novice',
-      level INTEGER DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      user_name TEXT,
-      user_avatar TEXT,
-      user_rank TEXT,
-      content TEXT,
-      is_edited INTEGER DEFAULT 0,
-      is_deleted INTEGER DEFAULT 0,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS activities (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT,
-      hash TEXT,
-      value TEXT,
-      user_name TEXT,
-      user_avatar TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS direct_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sender_id INTEGER,
-      receiver_id INTEGER,
-      content TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS wiki (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT,
-      fullName TEXT,
-      status TEXT,
-      statusColor TEXT,
-      description TEXT,
-      useCase TEXT,
-      vulnerabilities TEXT
-    );
-    CREATE TABLE IF NOT EXISTS apps (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      key TEXT UNIQUE NOT NULL,
-      name TEXT NOT NULL,
-      description TEXT,
-      image TEXT,
-      md5 TEXT,
-      sha1 TEXT,
-      sha256 TEXT
-    );
-  `);
+if (!configuredSessionSecret && !isProduction) {
+  console.warn("[AUTH] SESSION_SECRET not set; using an in-memory development secret.");
+}
 
-  // Migraciones: Asegurar que las columnas nuevas existan
-  try {
-    db.exec("ALTER TABLE messages ADD COLUMN user_rank TEXT;");
-    console.log("Columna 'user_rank' añadida a 'messages'");
-  } catch (e) {
-    // La columna probablemente ya existe
+class HttpError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
   }
+}
 
-  try {
-    db.exec("ALTER TABLE messages ADD COLUMN is_edited INTEGER DEFAULT 0;");
-    db.exec("ALTER TABLE messages ADD COLUMN is_deleted INTEGER DEFAULT 0;");
-  } catch (e) {
-    // Las columnas probablemente ya existen
+type PublicUser = {
+  id: number;
+  username: string;
+  email: string | null;
+  avatar_seed: string;
+  role: "user" | "admin";
+  points: number;
+  rank: string;
+  level: number;
+  created_at: string | Date;
+};
+
+type SessionPayload = {
+  userId: number;
+  exp: number;
+};
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || undefined,
+  host: process.env.DATABASE_URL ? undefined : (process.env.DB_HOST || "localhost"),
+  port: process.env.DATABASE_URL ? undefined : Number(process.env.DB_PORT || 5432),
+  database: process.env.DATABASE_URL ? undefined : (process.env.DB_NAME || "cryptotoolbox"),
+  user: process.env.DATABASE_URL ? undefined : (process.env.DB_USER || "postgres"),
+  password: process.env.DATABASE_URL ? undefined : (process.env.DB_PASSWORD || "postgres"),
+  max: Number(process.env.DB_POOL_MAX || 10),
+  ssl: process.env.DB_SSL === "true"
+    ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" }
+    : undefined,
+});
+
+function httpError(status: number, message: string): HttpError {
+  return new HttpError(status, message);
+}
+
+function asyncRoute(
+  handler: (req: Request, res: Response, next: NextFunction) => Promise<void | Response>,
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(handler(req, res, next)).catch(next);
+  };
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForDatabase() {
+  const attempts = Number(process.env.DB_CONNECT_RETRIES || 20);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await pool.query("SELECT 1");
+      return;
+    } catch (error) {
+      if (attempt === attempts) throw error;
+      await delay(1000);
+    }
   }
+}
 
-  // Migración: Agregar columna 'level' si no existe
-  try {
-    db.prepare("ALTER TABLE users ADD COLUMN level INTEGER DEFAULT 1").run();
-    console.log("[DB] Columna 'level' agregada a la tabla 'users'");
-  } catch (e) {
-    // La columna ya existe o hubo otro error
+function asObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw httpError(400, "JSON invalido");
   }
+  return value as Record<string, unknown>;
+}
 
-  // Initialize apps if empty
-  const appsCount = db.prepare("SELECT COUNT(*) as count FROM apps").get() as any;
-  if (appsCount.count === 0) {
-    const initialApps = [
-      {
-        key: 'putty',
-        name: 'putty.exe',
-        description: 'Un emulador de terminal, consola serie y aplicación de transferencia de archivos de red gratuito y de código abierto. Es la herramienta estándar para conexiones SSH en entornos Windows.',
-        image: 'https://images-eds-ssl.xboxlive.com/image?url=4rt9.lXDC4H_93laV1_eHHFT949fUipzkiFOBH3fAiZZUCdYojwUyX2aTonS1aIwMrx6NUIsHfUHSLzjGJFxxrDCrF4C8KvxYUkHBppqZebLObdfSSbqzWqRS3lDi.Ystyxw4_k2Pjh.pceYORwgAJzEZ0VJ3Hwwbhe5wvCwruY-&format=source&h=115',
-        md5: '36e31f610eef3223154e6e8fd074190f',
-        sha1: '1f2800382cd71163c10e5ce0a32b60297489fbb5',
-        sha256: '16cbe40fb24ce2d422afddb5a90a5801ced32ef52c22c2fc77b25a90837f28ad',
-      },
-      {
-        key: 'plink',
-        name: 'plink.exe',
-        description: 'Una interfaz de línea de comandos para los motores de PuTTY. Es una extensión vital para la automatización y el scripting, permitiendo ejecutar comandos remotos de forma segura desde la consola.',
-        image: 'https://images-eds-ssl.xboxlive.com/image?url=4rt9.lXDC4H_93laV1_eHHFT949fUipzkiFOBH3fAiZZUCdYojwUyX2aTonS1aIwMrx6NUIsHfUHSLzjGJFxxrDCrF4C8KvxYUkHBppqZebLObdfSSbqzWqRS3lDi.Ystyxw4_k2Pjh.pceYORwgAJzEZ0VJ3Hwwbhe5wvCwruY-&format=source&h=115',
-        md5: '269ce7b3a3fcdf735cd8a37c04abfdae',
-        sha1: '46ddfbbb5b4193279b9e024a5d013f5d825fcdf5',
-        sha256: '50479953865b30775056441b10fdcb984126ba4f98af4f64756902a807b453e7',
-      },
-      {
-        key: 'virtualbox',
-        name: 'VirtualBox-7.0.8-156879-Win.exe',
-        description: 'Un potente software de virtualización para arquitecturas x86 y AMD64/Intel64. Permite a empresas y usuarios domésticos ejecutar múltiples sistemas operativos invitados simultáneamente.',
-        image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/ff/VirtualBox_2024_Logo.svg/1280px-VirtualBox_2024_Logo.svg.png',
-        md5: '5277068968032af616e7e4cc86f1d3c2',
-        sha1: '6e3e2912d2131bb249f416088ee49088ab841580',
-        sha256: '8a2da26ca69c1ddfc50fb65ee4fa8f269e692302046df4e2f48948775ba6339a',
+function normalizeString(value: unknown, field: string, maxLength: number, required = true): string {
+  if (value === undefined || value === null) {
+    if (required) throw httpError(400, `${field} requerido`);
+    return "";
+  }
+  if (typeof value !== "string") {
+    throw httpError(400, `${field} debe ser texto`);
+  }
+  const normalized = value.trim();
+  if (!normalized && required) throw httpError(400, `${field} requerido`);
+  if (normalized.length > maxLength) throw httpError(400, `${field} demasiado largo`);
+  if (UNSAFE_TEXT_RE.test(normalized)) throw httpError(400, `${field} contiene caracteres no permitidos`);
+  return normalized;
+}
+
+function normalizeOptionalEmail(value: unknown): string | null {
+  const email = normalizeString(value, "email", 254, false);
+  if (!email) return null;
+  if (!/^[^\s@<>]{1,64}@[^\s@<>]{1,189}\.[^\s@<>]{2,63}$/.test(email)) {
+    throw httpError(400, "email invalido");
+  }
+  return email.toLowerCase();
+}
+
+function normalizeUsername(value: unknown): string {
+  const username = normalizeString(value, "username", 40);
+  if (!USERNAME_RE.test(username)) throw httpError(400, "username invalido");
+  return username;
+}
+
+function normalizePin(value: unknown): string {
+  if (typeof value !== "string" || !PIN_RE.test(value)) {
+    throw httpError(400, "PIN de 4 digitos requerido");
+  }
+  return value;
+}
+
+function normalizeId(value: unknown, field = "id"): number {
+  const id = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(id) || id < 1) throw httpError(400, `${field} invalido`);
+  return id;
+}
+
+function normalizeHash(value: unknown, field = "hash"): string {
+  const hash = normalizeString(value, field, 128).toLowerCase();
+  if (!HASH_RE.test(hash)) throw httpError(400, `${field} invalido`);
+  return hash;
+}
+
+function normalizeUrl(value: unknown, field = "url"): string {
+  const text = normalizeString(value, field, 2048);
+  let parsed: URL;
+  try {
+    parsed = new URL(text);
+  } catch {
+    throw httpError(400, `${field} invalida`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw httpError(400, `${field} debe usar HTTPS`);
+  }
+  if (parsed.username || parsed.password) {
+    throw httpError(400, `${field} no puede incluir credenciales`);
+  }
+  return parsed.toString();
+}
+
+function isUnsafeStoredText(value: unknown): boolean {
+  return typeof value !== "string" || !value.trim() || value.length > 2048 || UNSAFE_TEXT_RE.test(value);
+}
+
+function validateStatusColor(value: unknown): string {
+  const color = normalizeString(value, "statusColor", 7);
+  if (!HEX_COLOR_RE.test(color)) throw httpError(400, "statusColor invalido");
+  return color;
+}
+
+function validateAppBody(body: unknown) {
+  const obj = asObject(body);
+  return {
+    key: normalizeString(obj.key, "key", 64).toLowerCase(),
+    name: normalizeString(obj.name, "name", 120),
+    description: normalizeString(obj.description, "description", 1000),
+    image: normalizeUrl(obj.image, "image"),
+    md5: normalizeHash(obj.md5, "md5"),
+    sha1: normalizeHash(obj.sha1, "sha1"),
+    sha256: normalizeHash(obj.sha256, "sha256"),
+  };
+}
+
+function validateWikiBody(body: unknown) {
+  const obj = asObject(body);
+  return {
+    name: normalizeString(obj.name, "name", 80),
+    fullName: normalizeString(obj.fullName, "fullName", 160),
+    status: normalizeString(obj.status, "status", 40),
+    statusColor: validateStatusColor(obj.statusColor),
+    description: normalizeString(obj.description, "description", 1200),
+    useCase: normalizeString(obj.useCase, "useCase", 1200),
+    vulnerabilities: normalizeString(obj.vulnerabilities, "vulnerabilities", 1200),
+  };
+}
+
+function rankForPoints(points: number, role: string) {
+  if (role === "admin") return "System Administrator";
+  if (points >= 5000) return "Elite Cipher";
+  if (points >= 2000) return "Root Admin";
+  if (points >= 1000) return "Cipher Master";
+  if (points >= 500) return "Security Analyst";
+  if (points >= 200) return "Junior Operator";
+  return "Novice";
+}
+
+function levelForPoints(points: number) {
+  return Math.max(1, Math.floor((1 + Math.sqrt(1 + (8 * points) / 50)) / 2));
+}
+
+function hashPin(pin: string): string {
+  const salt = randomBytes(16).toString("hex");
+  const hash = scryptSync(pin, salt, 64).toString("hex");
+  return `scrypt$${salt}$${hash}`;
+}
+
+function verifyPin(pin: string, storedPin: string | null | undefined): boolean {
+  if (!storedPin) return false;
+  if (!storedPin.startsWith("scrypt$")) {
+    return storedPin === pin;
+  }
+  const [, salt, storedHash] = storedPin.split("$");
+  if (!salt || !storedHash) return false;
+  const candidate = scryptSync(pin, salt, 64);
+  const expected = Buffer.from(storedHash, "hex");
+  return expected.length === candidate.length && timingSafeEqual(candidate, expected);
+}
+
+function signSession(userId: number): string {
+  const payload: SessionPayload = {
+    userId,
+    exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
+  };
+  const payloadText = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const sig = createHmac("sha256", sessionSecret).update(payloadText).digest("base64url");
+  return `${payloadText}.${sig}`;
+}
+
+function verifySessionToken(token: string | undefined): SessionPayload | null {
+  if (!token) return null;
+  const [payloadText, sig] = token.split(".");
+  if (!payloadText || !sig) return null;
+  const expectedSig = createHmac("sha256", sessionSecret).update(payloadText).digest("base64url");
+  const sigBuffer = Buffer.from(sig);
+  const expectedBuffer = Buffer.from(expectedSig);
+  if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(payloadText, "base64url").toString("utf8")) as SessionPayload;
+    if (!Number.isInteger(payload.userId) || payload.userId < 1) return null;
+    if (!Number.isInteger(payload.exp) || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  if (!header) return {};
+  return header.split(";").reduce<Record<string, string>>((acc, part) => {
+    const [rawKey, ...rawValue] = part.trim().split("=");
+    if (!rawKey) return acc;
+    acc[rawKey] = decodeURIComponent(rawValue.join("="));
+    return acc;
+  }, {});
+}
+
+function isSecureRequest(req: Request): boolean {
+  return Boolean(req.secure || req.headers["x-forwarded-proto"] === "https");
+}
+
+function setSessionCookie(req: Request, res: Response, userId: number) {
+  const secureCookie = process.env.COOKIE_SECURE === "true" || (isProduction && process.env.COOKIE_SECURE !== "false");
+  const parts = [
+    `${SESSION_COOKIE}=${encodeURIComponent(signSession(userId))}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Path=/",
+    `Max-Age=${SESSION_TTL_SECONDS}`,
+  ];
+  if (secureCookie || isSecureRequest(req)) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function clearSessionCookie(res: Response) {
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
+async function getPublicUserById(userId: number): Promise<PublicUser | null> {
+  const result = await pool.query<PublicUser>(
+    `SELECT id, username, email, avatar_seed, role, points, rank, level, created_at
+     FROM users
+     WHERE id = $1`,
+    [userId],
+  );
+  return result.rows[0] || null;
+}
+
+async function getSessionUserFromCookie(cookieHeader: string | undefined): Promise<PublicUser | null> {
+  const token = parseCookies(cookieHeader)[SESSION_COOKIE];
+  const payload = verifySessionToken(token);
+  if (!payload) return null;
+  return getPublicUserById(payload.userId);
+}
+
+async function requireSession(req: Request): Promise<PublicUser> {
+  const user = await getSessionUserFromCookie(req.headers.cookie);
+  if (!user) throw httpError(401, "Sesion requerida");
+  return user;
+}
+
+async function requireAdmin(req: Request): Promise<PublicUser> {
+  const user = await requireSession(req);
+  if (user.role !== "admin") throw httpError(403, "No autorizado");
+  return user;
+}
+
+function getAllowedOrigins(): Set<string> {
+  const configured = [
+    process.env.APP_ORIGIN,
+    process.env.APP_URL,
+    ...(process.env.ALLOWED_ORIGINS || "").split(","),
+    `http://localhost:${PORT}`,
+    `https://localhost:${PORT}`,
+  ];
+  return new Set(configured.map((value) => value?.trim()).filter(Boolean) as string[]);
+}
+
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  if (getAllowedOrigins().has(origin)) return true;
+  return !isProduction && /^https?:\/\/(?:localhost|127\.0\.0\.1):\d+$/.test(origin);
+}
+
+function configureSecurity(app: express.Express) {
+  app.disable("x-powered-by");
+  app.set("trust proxy", 1);
+
+  if (process.env.FORCE_HTTPS === "true") {
+    app.use((req, res, next) => {
+      if (isSecureRequest(req) || req.hostname === "localhost" || req.hostname === "127.0.0.1") {
+        return next();
       }
-    ];
-    const insertApp = db.prepare("INSERT INTO apps (key, name, description, image, md5, sha1, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)");
-    initialApps.forEach(app => {
-      insertApp.run(app.key, app.name, app.description, app.image, app.md5, app.sha1, app.sha256);
+      return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
     });
   }
 
-  // Asegurar que el administrador principal siempre existe
-  const adminSeed = db.prepare("SELECT * FROM users WHERE username = 'MichaelRobles20250845'").get();
-  if (!adminSeed) {
-    db.prepare("INSERT INTO users (username, avatar_seed, pin, role, rank, email) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("MichaelRobles20250845", "MichaelRobles20250845", "2007", "admin", "System Administrator", "michaelroblesfermin@gmail.com");
-    console.log("[DB] Administrador principal creado");
-  } else {
-    // Asegurar que el PIN sea 2007 si el usuario ya existe
-    db.prepare("UPDATE users SET pin = '2007', role = 'admin', rank = 'System Administrator' WHERE username = 'MichaelRobles20250845'").run();
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && !isAllowedOrigin(origin)) {
+      return res.status(403).json({ error: "Origin no permitido" });
+    }
+    return next();
+  });
+
+  app.use(helmet({
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        "default-src": ["'self'"],
+        "base-uri": ["'self'"],
+        "object-src": ["'none'"],
+        "frame-ancestors": ["'none'"],
+        "form-action": ["'self'"],
+        "script-src": isProduction ? ["'self'"] : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        "script-src-attr": ["'none'"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "img-src": ["'self'", "data:", "https:"],
+        "font-src": ["'self'", "data:"],
+        "connect-src": isProduction
+          ? ["'self'", "https://www.nitrxgen.net", "https://md5.gromweb.com", "https://sha1.gromweb.com", "wss:"]
+          : ["'self'", "https://www.nitrxgen.net", "https://md5.gromweb.com", "https://sha1.gromweb.com", "ws:", "wss:"],
+        "media-src": ["'self'"],
+        "manifest-src": ["'self'"],
+        "upgrade-insecure-requests": isProduction ? [] : null,
+      },
+    },
+    hsts: isProduction || process.env.FORCE_HTTPS === "true"
+      ? { maxAge: 15552000, includeSubDomains: true }
+      : false,
+    referrerPolicy: { policy: "no-referrer" },
+    frameguard: { action: "deny" },
+    noSniff: true,
+  }));
+}
+
+async function initializeDatabase() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      email TEXT UNIQUE,
+      pin TEXT NOT NULL,
+      avatar_seed TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
+      points INTEGER NOT NULL DEFAULT 0 CHECK (points >= 0),
+      rank TEXT NOT NULL DEFAULT 'Novice',
+      level INTEGER NOT NULL DEFAULT 1 CHECK (level >= 1),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS hash_cache (
+      hash TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      user_name TEXT NOT NULL,
+      user_avatar TEXT NOT NULL,
+      user_rank TEXT,
+      content TEXT NOT NULL,
+      is_edited INTEGER NOT NULL DEFAULT 0,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS activities (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      type TEXT NOT NULL,
+      hash TEXT NOT NULL,
+      value TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      user_avatar TEXT NOT NULL,
+      timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS direct_messages (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      sender_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      receiver_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      content TEXT NOT NULL,
+      timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS wiki (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      full_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      status_color TEXT NOT NULL,
+      description TEXT NOT NULL,
+      use_case TEXT NOT NULL,
+      vulnerabilities TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS apps (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      key TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      image TEXT NOT NULL,
+      md5 TEXT NOT NULL,
+      sha1 TEXT NOT NULL,
+      sha256 TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_activities_timestamp ON activities (timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_direct_messages_pair ON direct_messages (sender_id, receiver_id, timestamp);
+  `);
+
+  await seedDefaultData();
+  await purgeUnsafePersistedRows();
+}
+
+async function seedDefaultData() {
+  const initialApps = [
+    {
+      key: "putty",
+      name: "putty.exe",
+      description: "Emulador de terminal y cliente SSH para Windows.",
+      image: "https://images-eds-ssl.xboxlive.com/image?url=4rt9.lXDC4H_93laV1_eHHFT949fUipzkiFOBH3fAiZZUCdYojwUyX2aTonS1aIwMrx6NUIsHfUHSLzjGJFxxrDCrF4C8KvxYUkHBppqZebLObdfSSbqzWqRS3lDi.Ystyxw4_k2Pjh.pceYORwgAJzEZ0VJ3Hwwbhe5wvCwruY-&format=source&h=115",
+      md5: "36e31f610eef3223154e6e8fd074190f",
+      sha1: "1f2800382cd71163c10e5ce0a32b60297489fbb5",
+      sha256: "16cbe40fb24ce2d422afddb5a90a5801ced32ef52c22c2fc77b25a90837f28ad",
+    },
+    {
+      key: "plink",
+      name: "plink.exe",
+      description: "Interfaz de linea de comandos para conexiones SSH automatizadas.",
+      image: "https://images-eds-ssl.xboxlive.com/image?url=4rt9.lXDC4H_93laV1_eHHFT949fUipzkiFOBH3fAiZZUCdYojwUyX2aTonS1aIwMrx6NUIsHfUHSLzjGJFxxrDCrF4C8KvxYUkHBppqZebLObdfSSbqzWqRS3lDi.Ystyxw4_k2Pjh.pceYORwgAJzEZ0VJ3Hwwbhe5wvCwruY-&format=source&h=115",
+      md5: "269ce7b3a3fcdf735cd8a37c04abfdae",
+      sha1: "46ddfbbb5b4193279b9e024a5d013f5d825fcdf5",
+      sha256: "50479953865b30775056441b10fdcb984126ba4f98af4f64756902a807b453e7",
+    },
+    {
+      key: "virtualbox",
+      name: "VirtualBox-7.0.8-156879-Win.exe",
+      description: "Software de virtualizacion para ejecutar varios sistemas operativos.",
+      image: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/ff/VirtualBox_2024_Logo.svg/1280px-VirtualBox_2024_Logo.svg.png",
+      md5: "5277068968032af616e7e4cc86f1d3c2",
+      sha1: "6e3e2912d2131bb249f416088ee49088ab841580",
+      sha256: "8a2da26ca69c1ddfc50fb65ee4fa8f269e692302046df4e2f48948775ba6339a",
+    },
+  ];
+
+  for (const item of initialApps) {
+    await pool.query(
+      `INSERT INTO apps (key, name, description, image, md5, sha1, sha256)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (key) DO NOTHING`,
+      [item.key, item.name, item.description, item.image, item.md5, item.sha1, item.sha256],
+    );
   }
 
-  // Initialize wiki with default data if empty
-  const wikiCount = db.prepare("SELECT COUNT(*) as count FROM wiki").get() as any;
-  if (wikiCount.count === 0) {
-    const insertWiki = db.prepare("INSERT INTO wiki (name, fullName, status, statusColor, description, useCase, vulnerabilities) VALUES (?, ?, ?, ?, ?, ?, ?)");
-    const defaultWiki = [
-      {
-        name: 'MD5',
-        fullName: 'Message Digest Algorithm 5',
-        status: 'Inseguro',
-        statusColor: '#ef4444',
-        description: 'Diseñado por Ronald Rivest en 1991. Produce un hash de 128 bits.',
-        useCase: 'Verificación de integridad de archivos no críticos, sumas de comprobación antiguas.',
-        vulnerabilities: 'Vulnerable a ataques de colisión. Se pueden generar dos archivos diferentes con el mismo hash en segundos.'
+  const defaultWiki = [
+    {
+      name: "MD5",
+      fullName: "Message Digest Algorithm 5",
+      status: "Inseguro",
+      statusColor: "#ef4444",
+      description: "Disenado por Ronald Rivest en 1991. Produce un hash de 128 bits.",
+      useCase: "Verificacion de integridad de archivos no criticos y sistemas heredados.",
+      vulnerabilities: "Vulnerable a ataques de colision. No debe usarse para seguridad moderna.",
+    },
+    {
+      name: "SHA-1",
+      fullName: "Secure Hash Algorithm 1",
+      status: "Obsoleto",
+      statusColor: "#f97316",
+      description: "Publicado en 1995. Produce un hash de 160 bits.",
+      useCase: "Sistemas heredados y compatibilidad con herramientas antiguas.",
+      vulnerabilities: "Colisiones practicas demostradas. Debe migrarse a SHA-2 o superior.",
+    },
+    {
+      name: "SHA-256",
+      fullName: "Secure Hash Algorithm 2 (256 bits)",
+      status: "Seguro",
+      statusColor: "#10b981",
+      description: "Parte de la familia SHA-2. Produce un hash de 256 bits.",
+      useCase: "Firmas digitales, integridad de archivos y sistemas modernos.",
+      vulnerabilities: "No se conocen ataques de colision practicos.",
+    },
+  ];
+
+  for (const item of defaultWiki) {
+    await pool.query(
+      `INSERT INTO wiki (name, full_name, status, status_color, description, use_case, vulnerabilities)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (name) DO NOTHING`,
+      [item.name, item.fullName, item.status, item.statusColor, item.description, item.useCase, item.vulnerabilities],
+    );
+  }
+
+  const adminUsername = (process.env.ADMIN_USERNAME || "").trim();
+  const adminEmail = normalizeOptionalEmail(process.env.ADMIN_EMAIL || "");
+  const adminPin = process.env.ADMIN_PIN || "";
+
+  if (adminUsername || adminEmail || adminPin) {
+    if (!adminUsername || !USERNAME_RE.test(adminUsername) || !PIN_RE.test(adminPin)) {
+      console.warn("[DB] ADMIN_USERNAME and ADMIN_PIN must be valid to seed the administrator.");
+      return;
+    }
+    await pool.query(
+      `INSERT INTO users (username, email, pin, avatar_seed, role, rank)
+       VALUES ($1, $2, $3, $4, 'admin', 'System Administrator')
+       ON CONFLICT (username) DO UPDATE
+       SET email = EXCLUDED.email,
+           pin = EXCLUDED.pin,
+           role = 'admin',
+           rank = 'System Administrator',
+           avatar_seed = EXCLUDED.avatar_seed`,
+      [adminUsername, adminEmail, hashPin(adminPin), adminUsername],
+    );
+    console.log("[DB] Administrator user provisioned from environment.");
+  }
+}
+
+async function purgeUnsafePersistedRows() {
+  const wikiRows = await pool.query("SELECT id, name, full_name, status, status_color, description, use_case, vulnerabilities FROM wiki");
+  for (const row of wikiRows.rows) {
+    const unsafe = [
+      row.name,
+      row.full_name,
+      row.status,
+      row.description,
+      row.use_case,
+      row.vulnerabilities,
+    ].some(isUnsafeStoredText) || !HEX_COLOR_RE.test(row.status_color);
+    if (unsafe) await pool.query("DELETE FROM wiki WHERE id = $1", [row.id]);
+  }
+
+  const appRows = await pool.query("SELECT id, key, name, description, image, md5, sha1, sha256 FROM apps");
+  for (const row of appRows.rows) {
+    const unsafe = [row.key, row.name, row.description].some(isUnsafeStoredText)
+      || !HASH_RE.test(row.md5)
+      || !HASH_RE.test(row.sha1)
+      || !HASH_RE.test(row.sha256)
+      || (() => {
+        try {
+          const parsed = new URL(row.image);
+          return parsed.protocol !== "https:";
+        } catch {
+          return true;
+        }
+      })();
+    if (unsafe) await pool.query("DELETE FROM apps WHERE id = $1", [row.id]);
+  }
+}
+
+function wikiSelectSql() {
+  return `SELECT id, name, full_name AS "fullName", status, status_color AS "statusColor",
+                 description, use_case AS "useCase", vulnerabilities
+          FROM wiki`;
+}
+
+function mapRows<T extends QueryResultRow>(result: { rows: T[] }) {
+  return result.rows;
+}
+
+async function startServer() {
+  await waitForDatabase();
+  await initializeDatabase();
+
+  const app = express();
+  const httpServer = createServer(app);
+  const io = new Server(httpServer, {
+    transports: ["websocket"],
+    cors: {
+      credentials: true,
+      origin(origin, callback) {
+        if (isAllowedOrigin(origin)) return callback(null, true);
+        return callback(new Error("Origin not allowed"), false);
       },
-      {
-        name: 'SHA-1',
-        fullName: 'Secure Hash Algorithm 1',
-        status: 'Obsoleto',
-        statusColor: '#f97316',
-        description: 'Diseñado por la NSA y publicado en 1995. Produce un hash de 160 bits.',
-        useCase: 'Sistemas heredados, Git (para identificar commits, aunque se está migrando).',
-        vulnerabilities: 'Teóricamente roto desde 2005. Google demostró una colisión práctica en 2017 (SHAttered).'
-      },
-      {
-        name: 'SHA-256',
-        fullName: 'Secure Hash Algorithm 2 (256 bits)',
-        status: 'Seguro',
-        statusColor: '#10b981',
-        description: 'Parte de la familia SHA-2, diseñado por la NSA. Produce un hash de 256 bits.',
-        useCase: 'Minería de Bitcoin, SSL/TLS, firmas digitales modernas, seguridad de contraseñas.',
-        vulnerabilities: 'No se conocen ataques de colisión prácticos hasta la fecha. Considerado el estándar de la industria.'
+    },
+  });
+  const onlineUsers = new Map<string, PublicUser>();
+
+  configureSecurity(app);
+  app.use(express.json({ limit: "100kb" }));
+
+  app.get("/api/health", asyncRoute(async (_req, res) => {
+    await pool.query("SELECT 1");
+    res.json({ ok: true, database: "postgresql" });
+  }));
+
+  app.get("/robots.txt", (_req, res) => {
+    res.type("text/plain").send("User-agent: *\nDisallow:\n");
+  });
+
+  app.get("/sitemap.xml", (_req, res) => {
+    const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+    res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${appUrl}/</loc></url></urlset>`);
+  });
+
+  app.get("/api/session", asyncRoute(async (req, res) => {
+    const user = await getSessionUserFromCookie(req.headers.cookie);
+    res.json({ authenticated: Boolean(user), user });
+  }));
+
+  app.post("/api/auth/logout", asyncRoute(async (_req, res) => {
+    clearSessionCookie(res);
+    res.json({ success: true });
+  }));
+
+  app.post("/api/auth/register", asyncRoute(async (req, res) => {
+    const body = asObject(req.body);
+    const username = normalizeUsername(body.username);
+    const email = normalizeOptionalEmail(body.email);
+    const pin = normalizePin(body.pin);
+    const avatarSeed = normalizeString(body.avatarSeed, "avatarSeed", 80, false) || username;
+    const configuredAdminUsername = process.env.ADMIN_USERNAME?.trim();
+
+    const existing = await pool.query<{ id: number; pin: string } & PublicUser>(
+      `SELECT id, username, email, pin, avatar_seed, role, points, rank, level, created_at
+       FROM users
+       WHERE username = $1`,
+      [username],
+    );
+
+    if (existing.rows[0]) {
+      const user = existing.rows[0];
+      if (!verifyPin(pin, user.pin)) throw httpError(401, "PIN incorrecto");
+      if (!user.pin.startsWith("scrypt$")) {
+        await pool.query("UPDATE users SET pin = $1 WHERE id = $2", [hashPin(pin), user.id]);
       }
-    ];
-    defaultWiki.forEach(w => insertWiki.run(w.name, w.fullName, w.status, w.statusColor, w.description, w.useCase, w.vulnerabilities));
-  }
+      setSessionCookie(req, res, user.id);
+      const publicUser = await getPublicUserById(user.id);
+      return res.json({ success: true, user: publicUser });
+    }
 
-  try {
-    db.exec("ALTER TABLE users ADD COLUMN pin TEXT");
-  } catch (e) {
-    // La columna ya existe
-  }
+    if (configuredAdminUsername && username === configuredAdminUsername) {
+      throw httpError(403, "El administrador debe crearse desde variables de entorno");
+    }
 
-  try {
-    db.exec("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'");
-  } catch (e) {
-    // La columna ya existe
-  }
+    const created = await pool.query<PublicUser>(
+      `INSERT INTO users (username, email, pin, avatar_seed, role, rank)
+       VALUES ($1, $2, $3, $4, 'user', 'Novice')
+       RETURNING id, username, email, avatar_seed, role, points, rank, level, created_at`,
+      [username, email, hashPin(pin), avatarSeed],
+    );
+    setSessionCookie(req, res, created.rows[0].id);
+    res.status(201).json({ success: true, user: created.rows[0] });
+  }));
 
-  try {
-    db.exec("ALTER TABLE users ADD COLUMN email TEXT");
-  } catch (e) {
-    // La columna ya existe
-  }
+  app.get("/api/wiki", asyncRoute(async (_req, res) => {
+    const rows = await pool.query(`${wikiSelectSql()} ORDER BY id ASC`);
+    res.json(mapRows(rows));
+  }));
 
-  try {
-    db.exec("ALTER TABLE users ADD COLUMN points INTEGER DEFAULT 0");
-  } catch (e) {
-    // La columna ya existe
-  }
+  app.post("/api/wiki", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const item = validateWikiBody(req.body);
+    const result = await pool.query<{ id: number }>(
+      `INSERT INTO wiki (name, full_name, status, status_color, description, use_case, vulnerabilities)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id`,
+      [item.name, item.fullName, item.status, item.statusColor, item.description, item.useCase, item.vulnerabilities],
+    );
+    res.status(201).json({ id: result.rows[0].id });
+  }));
 
-  try {
-    db.exec("ALTER TABLE users ADD COLUMN rank TEXT DEFAULT 'Novice'");
-  } catch (e) {
-    // La columna ya existe
-  }
+  app.put("/api/wiki/:id", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const id = normalizeId(req.params.id);
+    const item = validateWikiBody(req.body);
+    const result = await pool.query(
+      `UPDATE wiki
+       SET name = $1, full_name = $2, status = $3, status_color = $4,
+           description = $5, use_case = $6, vulnerabilities = $7
+       WHERE id = $8`,
+      [item.name, item.fullName, item.status, item.statusColor, item.description, item.useCase, item.vulnerabilities, id],
+    );
+    if (result.rowCount === 0) throw httpError(404, "Wiki no encontrado");
+    res.json({ success: true });
+  }));
 
-  try {
-    db.exec("ALTER TABLE messages ADD COLUMN is_edited INTEGER DEFAULT 0");
-  } catch (e) {
-    // La columna ya existe
-  }
+  app.delete("/api/wiki/:id", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const id = normalizeId(req.params.id);
+    const result = await pool.query("DELETE FROM wiki WHERE id = $1", [id]);
+    if (result.rowCount === 0) throw httpError(404, "Wiki no encontrado");
+    res.json({ success: true });
+  }));
 
-  try {
-    db.exec("ALTER TABLE messages ADD COLUMN is_deleted INTEGER DEFAULT 0");
-  } catch (e) {
-    // La columna ya existe
-  }
+  app.get("/api/apps", asyncRoute(async (_req, res) => {
+    const apps = await pool.query("SELECT id, key, name, description, image, md5, sha1, sha256 FROM apps ORDER BY id ASC");
+    res.json(apps.rows);
+  }));
 
-  try {
-    const columns = db.prepare("PRAGMA table_info(users)").all();
-    console.log("Users table columns:", columns.map((c: any) => c.name));
-  } catch (e) {
-    console.error("Error checking users table info:", e);
-  }
+  app.post("/api/apps", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const item = validateAppBody(req.body);
+    await pool.query(
+      `INSERT INTO apps (key, name, description, image, md5, sha1, sha256)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [item.key, item.name, item.description, item.image, item.md5, item.sha1, item.sha256],
+    );
+    res.status(201).json({ success: true });
+  }));
 
-  // API para Decodificación Online Gratuita (Sin API Keys)
-  app.get("/api/decode/online/:hash", async (req, res) => {
-    const { hash } = req.params;
-    const hashLower = hash.toLowerCase();
-    
-    console.log(`[FREE-DECODE] Buscando hash: ${hashLower}`);
+  app.put("/api/apps/:id", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const id = normalizeId(req.params.id);
+    const item = validateAppBody(req.body);
+    const result = await pool.query(
+      `UPDATE apps
+       SET key = $1, name = $2, description = $3, image = $4, md5 = $5, sha1 = $6, sha256 = $7
+       WHERE id = $8`,
+      [item.key, item.name, item.description, item.image, item.md5, item.sha1, item.sha256, id],
+    );
+    if (result.rowCount === 0) throw httpError(404, "App no encontrada");
+    res.json({ success: true });
+  }));
 
-    // 0. Diccionario local ultra-rápido para hashes comunes
+  app.delete("/api/apps/:id", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const id = normalizeId(req.params.id);
+    const result = await pool.query("DELETE FROM apps WHERE id = $1", [id]);
+    if (result.rowCount === 0) throw httpError(404, "App no encontrada");
+    res.json({ success: true });
+  }));
+
+  app.get("/api/hashes", asyncRoute(async (req, res) => {
+    await requireSession(req);
+    const rows = await pool.query<{ hash: string; value: string }>("SELECT hash, value FROM hash_cache");
+    const cache = rows.rows.reduce<Record<string, string>>((acc, row) => {
+      acc[row.hash] = row.value;
+      return acc;
+    }, {});
+    res.json(cache);
+  }));
+
+  app.post("/api/hashes", asyncRoute(async (req, res) => {
+    const user = await requireSession(req);
+    const body = asObject(req.body);
+    const value = normalizeString(body.value, "value", 512);
+    const type = normalizeString(body.type || "generate", "type", 20);
+    if (!["generate", "decode", "verify", "file"].includes(type)) throw httpError(400, "type invalido");
+
+    const rawHashes = body.hashes && typeof body.hashes === "object"
+      ? Object.values(body.hashes as Record<string, unknown>)
+      : [body.hash];
+    const hashes = rawHashes.map((item) => normalizeHash(item)).filter(Boolean);
+    if (hashes.length === 0) throw httpError(400, "hash requerido");
+
+    for (const hash of hashes) {
+      await pool.query(
+        `INSERT INTO hash_cache (hash, value)
+         VALUES ($1, $2)
+         ON CONFLICT (hash) DO UPDATE SET value = EXCLUDED.value, created_at = now()`,
+        [hash, value],
+      );
+    }
+
+    const activityHashStr = JSON.stringify(Object.fromEntries(hashes.map((hash, index) => [`h${index + 1}`, hash])));
+    const activity = await pool.query(
+      `INSERT INTO activities (type, hash, value, user_name, user_avatar)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, type, hash, value, user_name, user_avatar, timestamp`,
+      [type, activityHashStr, value, user.username, user.avatar_seed],
+    );
+
+    io.emit("new_activity", activity.rows[0]);
+    res.json({ success: true });
+  }));
+
+  app.get("/api/decode/online/:hash", asyncRoute(async (req, res) => {
+    await requireSession(req);
+    const hashLower = normalizeHash(req.params.hash);
     const commonHashes: Record<string, string> = {
       "098f6bcd4621d373cade4e832627b4f6": "test",
       "5f4dcc3b5aa765d61d8327deb882cf99": "password",
       "e10adc3949ba59abbe56e057f20f883e": "123456",
       "d033e22ae348aeb5660fc2140aec35850c4da997": "admin",
-      "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918": "admin"
+      "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918": "admin",
     };
 
     if (commonHashes[hashLower]) {
-      console.log(`[FREE-DECODE] Encontrado en diccionario local: ${commonHashes[hashLower]}`);
-      return res.json({ found: true, value: commonHashes[hashLower], source: 'Local Dictionary' });
+      return res.json({ found: true, value: commonHashes[hashLower], source: "Local Dictionary" });
     }
 
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      "User-Agent": "CryptoToolbox/1.0",
     };
 
-    // 1. Intentar con Nitrxgen (Solo MD5)
     if (hashLower.length === 32) {
       try {
-        console.log(`[FREE-DECODE] Consultando Nitrxgen...`);
         const response = await fetch(`https://www.nitrxgen.net/md5db/${hashLower}`, { headers });
         const text = await response.text();
-        if (text && text.trim().length > 0) {
-          console.log(`[FREE-DECODE] Encontrado en Nitrxgen: ${text}`);
-          return res.json({ found: true, value: text.trim(), source: 'Nitrxgen' });
+        if (text && text.trim().length > 0 && !UNSAFE_TEXT_RE.test(text)) {
+          return res.json({ found: true, value: text.trim(), source: "Nitrxgen" });
         }
-      } catch (e) {
-        console.error("[FREE-DECODE] Error en Nitrxgen:", e);
+      } catch {
+        // External decoder unavailable.
       }
     }
 
-    // 2. Intentar con Gromweb (MD5 y SHA1)
     if (hashLower.length === 32 || hashLower.length === 40) {
-      const type = hashLower.length === 32 ? 'md5' : 'sha1';
+      const type = hashLower.length === 32 ? "md5" : "sha1";
       try {
-        console.log(`[FREE-DECODE] Consultando Gromweb (${type})...`);
         const response = await fetch(`https://${type}.gromweb.com/?${type}=${hashLower}`, { headers });
         const html = await response.text();
-        
-        const match = html.match(/<em class="long-content string">([^<]+)<\/em>/) || 
-                      html.match(/<input type="text" value="([^"]+)" class="long-content string" readonly>/);
-        
-        if (match && match[1]) {
-          console.log(`[FREE-DECODE] Encontrado en Gromweb: ${match[1]}`);
-          return res.json({ found: true, value: match[1], source: 'Gromweb' });
+        const match = html.match(/<em class="long-content string">([^<]+)<\/em>/)
+          || html.match(/<input type="text" value="([^"]+)" class="long-content string" readonly>/);
+        if (match?.[1] && !UNSAFE_TEXT_RE.test(match[1])) {
+          return res.json({ found: true, value: match[1], source: "Gromweb" });
         }
-      } catch (e) {
-        console.error("[FREE-DECODE] Error en Gromweb:", e);
+      } catch {
+        // External decoder unavailable.
       }
     }
 
-    // Si no se encuentra en los anteriores
-    console.log(`[FREE-DECODE] No se encontró el valor para el hash: ${hashLower}`);
     res.json({ found: false });
-  });
+  }));
 
-  // API para Hashes (Shared Cache)
-  app.get("/api/wiki", (req, res) => {
-    const wiki = db.prepare("SELECT * FROM wiki").all();
-    res.json(wiki);
-  });
+  app.get("/api/users", asyncRoute(async (req, res) => {
+    await requireSession(req);
+    const rows = await pool.query(
+      `SELECT id, username, avatar_seed, role, points, rank, level, created_at
+       FROM users
+       ORDER BY username ASC`,
+    );
+    res.json(rows.rows);
+  }));
 
-  app.post("/api/wiki", (req, res) => {
-    const { name, fullName, status, statusColor, description, useCase, vulnerabilities, adminId } = req.body;
-    const user = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    if (!user || user.role !== 'admin') return res.status(403).json({ error: "Forbidden" });
+  app.post("/api/users/points", asyncRoute(async (req, res) => {
+    const user = await requireSession(req);
+    const body = asObject(req.body);
+    const userId = normalizeId(body.userId, "userId");
+    const pointsToAdd = Number(body.pointsToAdd);
+    if (user.id !== userId && user.role !== "admin") throw httpError(403, "No autorizado");
+    if (!Number.isInteger(pointsToAdd) || pointsToAdd < 1 || pointsToAdd > 25) {
+      throw httpError(400, "pointsToAdd invalido");
+    }
 
-    const result = db.prepare("INSERT INTO wiki (name, fullName, status, statusColor, description, useCase, vulnerabilities) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(name, fullName, status, statusColor, description, useCase, vulnerabilities);
-    res.json({ id: result.lastInsertRowid });
-  });
+    const updated = await pool.query<{ points: number; role: string }>(
+      `UPDATE users
+       SET points = points + $1
+       WHERE id = $2
+       RETURNING points, role`,
+      [pointsToAdd, userId],
+    );
+    if (updated.rowCount === 0) throw httpError(404, "Usuario no encontrado");
 
-  app.put("/api/wiki/:id", (req, res) => {
-    const { id } = req.params;
-    const { name, fullName, status, statusColor, description, useCase, vulnerabilities, adminId } = req.body;
-    const user = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    if (!user || user.role !== 'admin') return res.status(403).json({ error: "Forbidden" });
+    const newPoints = updated.rows[0].points;
+    const level = levelForPoints(newPoints);
+    const rank = rankForPoints(newPoints, updated.rows[0].role);
+    await pool.query("UPDATE users SET rank = $1, level = $2 WHERE id = $3", [rank, level, userId]);
+    res.json({ success: true, points: newPoints, rank, level });
+  }));
 
-    db.prepare("UPDATE wiki SET name = ?, fullName = ?, status = ?, statusColor = ?, description = ?, useCase = ?, vulnerabilities = ? WHERE id = ?")
-      .run(name, fullName, status, statusColor, description, useCase, vulnerabilities, id);
+  app.delete("/api/admin/users/:id", asyncRoute(async (req, res) => {
+    const admin = await requireAdmin(req);
+    const id = normalizeId(req.params.id);
+    if (id === admin.id) throw httpError(400, "No puedes eliminar tu propia cuenta");
+    const result = await pool.query("DELETE FROM users WHERE id = $1 AND role <> 'admin'", [id]);
+    if (result.rowCount === 0) throw httpError(404, "Usuario no encontrado");
+    io.emit("user_deleted", { userId: id });
     res.json({ success: true });
-  });
+  }));
 
-  app.delete("/api/wiki/:id", (req, res) => {
-    const { id } = req.params;
-    const adminId = req.headers['x-admin-id'];
-    const user = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    if (!user || user.role !== 'admin') return res.status(403).json({ error: "Forbidden" });
-
-    db.prepare("DELETE FROM wiki WHERE id = ?").run(id);
+  app.delete("/api/admin/hashes", asyncRoute(async (req, res) => {
+    const admin = await requireAdmin(req);
+    await pool.query("DELETE FROM hash_cache");
+    await pool.query("DELETE FROM activities");
+    await pool.query("DELETE FROM messages");
+    await pool.query("DELETE FROM direct_messages");
+    await pool.query("DELETE FROM users WHERE id <> $1 AND role <> 'admin'", [admin.id]);
+    await pool.query(
+      "UPDATE users SET points = 0, rank = 'System Administrator', level = 1 WHERE id = $1",
+      [admin.id],
+    );
+    onlineUsers.clear();
+    onlineUsers.set(`admin-${admin.id}`, admin);
+    io.emit("database_cleared");
+    io.emit("update_online_users", [admin]);
     res.json({ success: true });
-  });
+  }));
 
-  // API para Apps (Verify Hash)
-  app.get("/api/apps", (req, res) => {
-    const apps = db.prepare("SELECT * FROM apps").all();
-    res.json(apps);
-  });
+  app.delete("/api/admin/hashes/:hash", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const hash = normalizeHash(req.params.hash);
+    await pool.query("DELETE FROM hash_cache WHERE hash = $1", [hash]);
+    res.json({ success: true });
+  }));
 
-  app.post("/api/apps", (req, res) => {
-    const { key, name, description, image, md5, sha1, sha256, adminId } = req.body;
-    const admin = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    if (admin && admin.role === 'admin') {
-      db.prepare("INSERT INTO apps (key, name, description, image, md5, sha1, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)").run(key, name, description, image, md5, sha1, sha256);
-      res.json({ success: true });
-    } else {
-      res.status(403).json({ error: "No autorizado" });
+  app.delete("/api/admin/hash-values", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const body = asObject(req.body);
+    const value = normalizeString(body.value, "value", 512);
+    await pool.query("DELETE FROM hash_cache WHERE value = $1", [value]);
+    res.json({ success: true });
+  }));
+
+  app.delete("/api/admin/activities/:id", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const id = normalizeId(req.params.id);
+    await pool.query("DELETE FROM activities WHERE id = $1", [id]);
+    res.json({ success: true });
+  }));
+
+  app.get("/api/direct-messages/:userId/:otherId", asyncRoute(async (req, res) => {
+    const user = await requireSession(req);
+    const userId = normalizeId(req.params.userId, "userId");
+    const otherId = normalizeId(req.params.otherId, "otherId");
+    if (user.role !== "admin" && user.id !== userId && user.id !== otherId) {
+      throw httpError(403, "No autorizado");
     }
+    const rows = await pool.query(
+      `SELECT dm.*, s.username AS sender_name, s.avatar_seed AS sender_avatar, r.username AS receiver_name
+       FROM direct_messages dm
+       JOIN users s ON dm.sender_id = s.id
+       JOIN users r ON dm.receiver_id = r.id
+       WHERE (sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)
+       ORDER BY timestamp ASC`,
+      [userId, otherId],
+    );
+    res.json(rows.rows);
+  }));
+
+  app.get("/api/messages", asyncRoute(async (req, res) => {
+    await requireSession(req);
+    const rows = await pool.query(
+      `SELECT m.*, u.points, u.rank, u.level
+       FROM messages m
+       LEFT JOIN users u ON m.user_id = u.id
+       ORDER BY m.timestamp DESC
+       LIMIT 50`,
+    );
+    res.json(rows.rows.reverse());
+  }));
+
+  app.get("/api/activities", asyncRoute(async (req, res) => {
+    await requireSession(req);
+    const rows = await pool.query("SELECT * FROM activities ORDER BY timestamp DESC LIMIT 20");
+    res.json(rows.rows);
+  }));
+
+  io.use((socket, next) => {
+    getSessionUserFromCookie(socket.handshake.headers.cookie)
+      .then((user) => {
+        if (!user) return next(new Error("Unauthorized"));
+        socket.data.user = user;
+        return next();
+      })
+      .catch(next);
   });
-
-  app.put("/api/apps/:id", (req, res) => {
-    const { id } = req.params;
-    const { key, name, description, image, md5, sha1, sha256, adminId } = req.body;
-    const admin = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    if (admin && admin.role === 'admin') {
-      db.prepare("UPDATE apps SET key = ?, name = ?, description = ?, image = ?, md5 = ?, sha1 = ?, sha256 = ? WHERE id = ?").run(key, name, description, image, md5, sha1, sha256, id);
-      res.json({ success: true });
-    } else {
-      res.status(403).json({ error: "No autorizado" });
-    }
-  });
-
-  app.delete("/api/apps/:id", (req, res) => {
-    const { id } = req.params;
-    const adminId = req.headers['x-admin-id'];
-    const admin = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    if (admin && admin.role === 'admin') {
-      db.prepare("DELETE FROM apps WHERE id = ?").run(id);
-      res.json({ success: true });
-    } else {
-      res.status(403).json({ error: "No autorizado" });
-    }
-  });
-
-  app.get("/api/hashes", (req, res) => {
-    try {
-      const rows = db.prepare("SELECT hash, value FROM hash_cache").all() as { hash: string, value: string }[];
-      const cache = rows.reduce((acc, row) => {
-        acc[row.hash] = row.value;
-        return acc;
-      }, {} as Record<string, string>);
-      res.json(cache);
-    } catch (error) {
-      res.status(500).json({ error: "Error al cargar hashes" });
-    }
-  });
-
-  app.post("/api/hashes", (req, res) => {
-    const { hash, hashes, value, type = 'generate', userName, userAvatar, userId } = req.body;
-    const hashObj = hashes || { default: hash };
-    
-    try {
-      // Verificar que el usuario existe si se proporciona un ID
-      if (userId) {
-        const userExists = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
-        if (!userExists) {
-          return res.status(401).json({ error: "Usuario no encontrado" });
-        }
-      }
-
-      const insertHash = db.prepare("INSERT OR REPLACE INTO hash_cache (hash, value) VALUES (?, ?)");
-      Object.values(hashObj).forEach((h: any) => {
-        if (h) insertHash.run(h.toLowerCase(), value);
-      });
-      
-      const activityHashStr = JSON.stringify(hashObj);
-      const insertActivity = db.prepare("INSERT INTO activities (type, hash, value, user_name, user_avatar) VALUES (?, ?, ?, ?, ?)");
-      const result = insertActivity.run(type, activityHashStr, value, userName || 'Anónimo', userAvatar || '👤');
-      
-      const activity = {
-        id: result.lastInsertRowid,
-        type,
-        hash: activityHashStr,
-        value,
-        user_name: userName || 'Anónimo',
-        user_avatar: userAvatar || '👤',
-        timestamp: new Date().toISOString()
-      };
-
-      io.emit("new_activity", activity);
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Error al guardar hash" });
-    }
-  });
-
-  // API para Registro/Login
-  app.post("/api/auth/register", (req, res) => {
-    const { username, avatarSeed, pin, email } = req.body;
-    console.log("Intento de registro/login:", { username, email, pin: "****" });
-    
-    if (!username) return res.status(400).json({ error: "Nombre requerido" });
-    if (!pin || pin.length !== 4) return res.status(400).json({ error: "PIN de 4 dígitos requerido" });
-
-    try {
-      const existing = db.prepare("SELECT * FROM users WHERE username = ?").get(username) as any;
-      if (existing) {
-        console.log("Usuario existente encontrado:", existing.username);
-        if (existing.pin === pin) {
-          return res.json({ success: true, user: existing });
-        } else {
-          console.log("PIN incorrecto para usuario:", username);
-          return res.status(401).json({ error: "PIN incorrecto" });
-        }
-      }
-
-      console.log("Creando nuevo usuario:", username);
-      const role = (username === "MichaelRobles20250845" || email === "michaelroblesfermin@gmail.com") ? "admin" : "user";
-      const rank = role === "admin" ? "System Administrator" : "Novice";
-      const insert = db.prepare("INSERT INTO users (username, avatar_seed, pin, role, rank, email) VALUES (?, ?, ?, ?, ?, ?)");
-      const result = insert.run(username, avatarSeed || 'user', pin, role, rank, email || '');
-      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid);
-      console.log("Usuario creado exitosamente:", username);
-      res.json({ success: true, user });
-    } catch (err) {
-      console.error("Error en /api/auth/register:", err);
-      res.status(500).json({ error: "Error en el servidor" });
-    }
-  });
-
-  // API para Usuarios (para DMs)
-  app.get("/api/users", (req, res) => {
-    const rows = db.prepare("SELECT id, username, avatar_seed, role, points, rank, level FROM users").all();
-    res.json(rows);
-  });
-
-  app.post("/api/users/points", (req, res) => {
-    const { userId, pointsToAdd } = req.body;
-    if (!userId || typeof pointsToAdd !== 'number') {
-      console.log('[POINTS] Invalid request data:', req.body);
-      return res.status(400).json({ error: "Invalid request data" });
-    }
-
-    try {
-      console.log(`[POINTS] Attempting to add ${pointsToAdd} points to user ${userId}`);
-      // Update points atomically
-      const result = db.prepare("UPDATE users SET points = points + ? WHERE id = ?").run(pointsToAdd, userId);
-      
-      if (result.changes === 0) {
-        console.log(`[POINTS] User ${userId} not found`);
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      // Fetch updated user to calculate rank and level
-      const user = db.prepare("SELECT points, role FROM users WHERE id = ?").get(userId) as any;
-      if (!user) {
-        console.log(`[POINTS] User ${userId} disappeared after update?`);
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      const newPoints = user.points || 0;
-      console.log(`[POINTS] Current points for user ${userId}: ${newPoints}`);
-      
-      // Level calculation: points = 50 * level * (level - 1)
-      const level = Math.floor((1 + Math.sqrt(1 + 8 * newPoints / 50)) / 2);
-
-      let newRank = 'Novice';
-      if (user.role === 'admin') {
-        newRank = 'System Administrator';
-      } else {
-        if (newPoints >= 5000) newRank = 'Elite Cipher';
-        else if (newPoints >= 2000) newRank = 'Root Admin';
-        else if (newPoints >= 1000) newRank = 'Cipher Master';
-        else if (newPoints >= 500) newRank = 'Security Analyst';
-        else if (newPoints >= 200) newRank = 'Junior Operator';
-      }
-
-      db.prepare("UPDATE users SET rank = ?, level = ? WHERE id = ?").run(newRank, level, userId);
-      console.log(`[POINTS] Updated rank to ${newRank} and level to ${level} for user ${userId}`);
-      res.json({ success: true, points: newPoints, rank: newRank, level });
-    } catch (err) {
-      console.error("[POINTS] Error en /api/users/points:", err);
-      res.status(500).json({ error: "Error updating points" });
-    }
-  });
-
-  // API para Admin - Borrar Usuario
-  app.delete("/api/admin/users/:id", (req, res) => {
-    const { id } = req.params;
-    const adminId = req.headers['x-admin-id'];
-    const admin = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    
-    if (admin && admin.role === 'admin') {
-      db.prepare("DELETE FROM users WHERE id = ?").run(id);
-      db.prepare("DELETE FROM messages WHERE user_id = ?").run(id);
-      db.prepare("DELETE FROM direct_messages WHERE sender_id = ? OR receiver_id = ?").run(id, id);
-      
-      // Notificar a todos los sockets que este usuario ha sido eliminado
-      io.emit("user_deleted", { userId: Number(id) });
-      
-      res.json({ success: true });
-    } else {
-      res.status(403).json({ error: "No autorizado" });
-    }
-  });
-
-  // API para Admin - Borrar Base de Datos Completa (Hashes, Actividades, Usuarios, Mensajes)
-  app.delete("/api/admin/hashes", (req, res) => {
-    const adminId = req.headers['x-admin-id'];
-    console.log(`[ADMIN] Intento de limpieza de DB por admin ID: ${adminId}`);
-    
-    if (!adminId) return res.status(400).json({ error: "Admin ID missing" });
-
-    try {
-      const admin = db.prepare("SELECT role FROM users WHERE id = ?").get(Number(adminId)) as any;
-      
-      if (admin && admin.role === 'admin') {
-        console.log("[ADMIN] Autorizado. Iniciando limpieza...");
-        
-        db.prepare("DELETE FROM hash_cache").run();
-        db.prepare("DELETE FROM activities").run();
-        db.prepare("DELETE FROM messages").run();
-        db.prepare("DELETE FROM direct_messages").run();
-        
-        // Borramos todos los usuarios excepto el administrador actual y el administrador principal
-        const deletedUsers = db.prepare("DELETE FROM users WHERE id != ? AND username != 'MichaelRobles20250845'").run(Number(adminId));
-        console.log(`[ADMIN] Usuarios eliminados: ${deletedUsers.changes}`);
-        
-        // Opcionalmente resetear puntos del admin
-        db.prepare("UPDATE users SET points = 0, rank = 'System Administrator', level = 1 WHERE id = ?").run(Number(adminId));
-        
-        // Asegurar que el administrador principal tenga el PIN correcto
-        db.prepare("UPDATE users SET pin = '2007', points = 0, rank = 'System Administrator', level = 1 WHERE username = 'MichaelRobles20250845'").run();
-        
-        // Notificar a todos los clientes que la base de datos ha sido limpiada
-        console.log("[ADMIN] Emitiendo database_cleared a todos los sockets");
-        io.emit("database_cleared");
-        
-        // Limpiar usuarios online en el servidor (excepto el admin actual)
-        const currentAdminSocketId = Array.from(onlineUsers.entries()).find(([id, user]) => user.id === Number(adminId))?.[0];
-        const adminUser = currentAdminSocketId ? onlineUsers.get(currentAdminSocketId) : null;
-        
-        console.log(`[ADMIN] Limpiando onlineUsers map. Admin socket: ${currentAdminSocketId}`);
-        onlineUsers.clear();
-        if (currentAdminSocketId && adminUser) {
-          onlineUsers.set(currentAdminSocketId, adminUser);
-        }
-        
-        // Emitir la lista actualizada (solo el admin)
-        const uniqueUsers = Array.from(new Map(Array.from(onlineUsers.values()).map(u => [u.id, u])).values());
-        io.emit("update_online_users", uniqueUsers);
-        
-        console.log("[ADMIN] Limpieza completada con éxito");
-        res.json({ success: true });
-      } else {
-        console.log("[ADMIN] No autorizado. Rol insuficiente.");
-        res.status(403).json({ error: "No autorizado" });
-      }
-    } catch (error) {
-      console.error("[ADMIN] Error al limpiar base de datos:", error);
-      res.status(500).json({ error: "Error interno al limpiar base de datos" });
-    }
-  });
-
-  // API para Admin - Borrar Hash Específico
-  app.delete("/api/admin/hashes/:hash", (req, res) => {
-    const { hash } = req.params;
-    const adminId = req.headers['x-admin-id'];
-    const admin = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    
-    if (admin && admin.role === 'admin') {
-      db.prepare("DELETE FROM hash_cache WHERE hash = ?").run(hash);
-      res.json({ success: true });
-    } else {
-      res.status(403).json({ error: "No autorizado" });
-    }
-  });
-
-  // API para Admin - Borrar por Valor
-  app.delete("/api/admin/hashes/value/:value", (req, res) => {
-    const { value } = req.params;
-    const adminId = req.headers['x-admin-id'];
-    const admin = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    
-    if (admin && admin.role === 'admin') {
-      db.prepare("DELETE FROM hash_cache WHERE value = ?").run(value);
-      res.json({ success: true });
-    } else {
-      res.status(403).json({ error: "No autorizado" });
-    }
-  });
-
-  // API para Admin - Borrar Actividad Específica
-  app.delete("/api/admin/activities/:id", (req, res) => {
-    const { id } = req.params;
-    const adminId = req.headers['x-admin-id'];
-    const admin = db.prepare("SELECT role FROM users WHERE id = ?").get(adminId) as any;
-    
-    if (admin && admin.role === 'admin') {
-      db.prepare("DELETE FROM activities WHERE id = ?").run(id);
-      res.json({ success: true });
-    } else {
-      res.status(403).json({ error: "No autorizado" });
-    }
-  });
-
-  // API para Mensajes Directos
-  app.get("/api/direct-messages/:userId/:otherId", (req, res) => {
-    const { userId, otherId } = req.params;
-    const rows = db.prepare(`
-      SELECT dm.*, s.username as sender_name, s.avatar_seed as sender_avatar, r.username as receiver_name
-      FROM direct_messages dm
-      JOIN users s ON dm.sender_id = s.id
-      JOIN users r ON dm.receiver_id = r.id
-      WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
-      ORDER BY timestamp ASC
-    `).all(userId, otherId, otherId, userId);
-    res.json(rows);
-  });
-
-  // API para Mensajes
-  app.get("/api/messages", (req, res) => {
-    const rows = db.prepare(`
-      SELECT m.*, u.points, u.rank, u.level 
-      FROM messages m 
-      LEFT JOIN users u ON m.user_id = u.id 
-      ORDER BY m.timestamp DESC 
-      LIMIT 50
-    `).all();
-    res.json(rows.reverse());
-  });
-
-  // API para Actividades
-  app.get("/api/activities", (req, res) => {
-    const rows = db.prepare("SELECT * FROM activities ORDER BY timestamp DESC LIMIT 20").all();
-    res.json(rows);
-  });
-
-  // Socket.io para Chat y Actividad en tiempo real
-  const onlineUsers = new Map<string, any>();
 
   io.on("connection", (socket) => {
-    socket.on("user_online", (user) => {
+    const currentUser = () => socket.data.user as PublicUser;
+
+    socket.on("user_online", async () => {
+      const user = await getPublicUserById(currentUser().id);
+      if (!user) return socket.emit("force_logout");
+      socket.data.user = user;
       onlineUsers.set(socket.id, user);
-      const uniqueUsers = Array.from(new Map(Array.from(onlineUsers.values()).map(u => [u.id, u])).values());
+      const uniqueUsers = Array.from(new Map(Array.from(onlineUsers.values()).map((item) => [item.id, item])).values());
       io.emit("update_online_users", uniqueUsers);
     });
 
     socket.on("disconnect", () => {
       onlineUsers.delete(socket.id);
-      const uniqueUsers = Array.from(new Map(Array.from(onlineUsers.values()).map(u => [u.id, u])).values());
+      const uniqueUsers = Array.from(new Map(Array.from(onlineUsers.values()).map((item) => [item.id, item])).values());
       io.emit("update_online_users", uniqueUsers);
     });
 
-    socket.on("typing", (data) => {
-      socket.broadcast.emit("user_typing", data);
+    socket.on("typing", () => {
+      socket.broadcast.emit("user_typing", currentUser());
     });
 
-    socket.on("stop_typing", (data) => {
-      socket.broadcast.emit("user_stop_typing", data);
+    socket.on("stop_typing", () => {
+      socket.broadcast.emit("user_stop_typing", currentUser());
     });
 
-    socket.on("send_message", (msg, callback) => {
+    socket.on("send_message", async (msg, callback) => {
       try {
-        console.log("Received send_message:", msg);
-        
-        // Verificar que el usuario existe antes de permitir el mensaje
-        const userExists = db.prepare("SELECT id FROM users WHERE id = ?").get(msg.userId);
-        if (!userExists) {
-          console.log(`[AUTH] Intento de mensaje de usuario inexistente: ${msg.userId}`);
-          if (callback) callback({ status: "error", message: "Usuario no encontrado. Por favor, inicia sesión de nuevo." });
+        const content = normalizeString(msg?.content, "content", 1000);
+        const user = await getPublicUserById(currentUser().id);
+        if (!user) {
           socket.emit("force_logout");
-          return;
+          return callback?.({ status: "error", message: "Usuario no encontrado" });
         }
-
-        const result = db.prepare("INSERT INTO messages (user_id, user_name, user_avatar, user_rank, content) VALUES (?, ?, ?, ?, ?)")
-          .run(msg.userId, msg.userName, msg.userAvatar, msg.userRank, msg.content);
-        
-        const newMessage = {
-          ...msg,
-          id: Number(result.lastInsertRowid),
-          user_id: msg.userId,
-          user_name: msg.userName,
-          user_avatar: msg.userAvatar,
-          user_rank: msg.userRank,
-          is_edited: 0,
-          is_deleted: 0,
-          timestamp: new Date().toISOString()
-        };
-        console.log("Broadcasting new_message:", newMessage);
-        io.emit("new_message", newMessage);
-        
-        if (callback) callback({ status: "ok", id: newMessage.id });
+        const result = await pool.query(
+          `INSERT INTO messages (user_id, user_name, user_avatar, user_rank, content)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id, user_id, user_name, user_avatar, user_rank, content, is_edited, is_deleted, timestamp`,
+          [user.id, user.username, user.avatar_seed, user.rank, content],
+        );
+        io.emit("new_message", result.rows[0]);
+        callback?.({ status: "ok", id: result.rows[0].id });
       } catch (error) {
-        console.error("Error in send_message handler:", error);
-        if (callback) callback({ status: "error", message: error instanceof Error ? error.message : String(error) });
+        callback?.({ status: "error", message: error instanceof Error ? error.message : "Error" });
       }
     });
 
-    socket.on("edit_message", (data) => {
-      const { messageId, userId, newContent } = data;
-      const message = db.prepare("SELECT * FROM messages WHERE id = ?").get(Number(messageId)) as any;
-      const user = db.prepare("SELECT role FROM users WHERE id = ?").get(userId) as any;
-      
-      if (message && (message.user_id === userId || (user && user.role === 'admin'))) {
-        db.prepare("UPDATE messages SET content = ?, is_edited = 1 WHERE id = ?")
-          .run(newContent, Number(messageId));
-        io.emit("message_edited", { messageId: Number(messageId), newContent });
+    socket.on("edit_message", async (data) => {
+      try {
+        const messageId = normalizeId(data?.messageId, "messageId");
+        const newContent = normalizeString(data?.newContent, "newContent", 1000);
+        const user = currentUser();
+        const message = await pool.query<{ user_id: number }>("SELECT user_id FROM messages WHERE id = $1", [messageId]);
+        if (!message.rows[0]) return;
+        if (message.rows[0].user_id !== user.id && user.role !== "admin") return;
+        await pool.query("UPDATE messages SET content = $1, is_edited = 1 WHERE id = $2", [newContent, messageId]);
+        io.emit("message_edited", { messageId, newContent });
+      } catch {
+        // Invalid socket payload ignored.
       }
     });
 
-    socket.on("delete_message", (data) => {
-      const { messageId, userId } = data;
-      const message = db.prepare("SELECT * FROM messages WHERE id = ?").get(Number(messageId)) as any;
-      const user = db.prepare("SELECT role FROM users WHERE id = ?").get(userId) as any;
-      
-      if (message && (message.user_id === userId || (user && user.role === 'admin'))) {
-        if (user && user.role === 'admin') {
-          // Hard delete for admins
-          db.prepare("DELETE FROM messages WHERE id = ?").run(Number(messageId));
-          io.emit("message_deleted_hard", { messageId: Number(messageId) });
+    socket.on("delete_message", async (data) => {
+      try {
+        const messageId = normalizeId(data?.messageId, "messageId");
+        const user = currentUser();
+        const message = await pool.query<{ user_id: number }>("SELECT user_id FROM messages WHERE id = $1", [messageId]);
+        if (!message.rows[0]) return;
+        if (message.rows[0].user_id !== user.id && user.role !== "admin") return;
+        if (user.role === "admin") {
+          await pool.query("DELETE FROM messages WHERE id = $1", [messageId]);
+          io.emit("message_deleted_hard", { messageId });
         } else {
-          // Soft delete for regular users
-          db.prepare("UPDATE messages SET is_deleted = 1, content = 'Mensaje eliminado' WHERE id = ?")
-            .run(Number(messageId));
-          io.emit("message_deleted", { messageId: Number(messageId) });
+          await pool.query("UPDATE messages SET is_deleted = 1, content = 'Mensaje eliminado' WHERE id = $1", [messageId]);
+          io.emit("message_deleted", { messageId });
         }
+      } catch {
+        // Invalid socket payload ignored.
       }
     });
 
-    socket.on("new_activity", (act) => {
-      db.prepare("INSERT INTO activities (type, hash, value, user_name, user_avatar) VALUES (?, ?, ?, ?, ?)")
-        .run(act.type, act.hash, act.value, act.user_name, act.user_avatar);
-      io.emit("new_activity", act);
+    socket.on("new_activity", async (act) => {
+      try {
+        const user = currentUser();
+        const type = normalizeString(act?.type, "type", 20);
+        const hash = normalizeString(act?.hash, "hash", 512);
+        const value = normalizeString(act?.value, "value", 512);
+        if (!["generate", "decode", "verify", "file"].includes(type)) return;
+        const inserted = await pool.query(
+          `INSERT INTO activities (type, hash, value, user_name, user_avatar)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id, type, hash, value, user_name, user_avatar, timestamp`,
+          [type, hash, value, user.username, user.avatar_seed],
+        );
+        io.emit("new_activity", inserted.rows[0]);
+      } catch {
+        // Invalid socket payload ignored.
+      }
     });
 
-    socket.on("send_dm", (data) => {
-      const { senderId, receiverId, content } = data;
-      
-      // Verificar que ambos usuarios existen
-      const senderExists = db.prepare("SELECT id FROM users WHERE id = ?").get(senderId);
-      const receiverExists = db.prepare("SELECT id FROM users WHERE id = ?").get(receiverId);
-      
-      if (!senderExists) {
-        socket.emit("force_logout");
-        return;
+    socket.on("send_dm", async (data) => {
+      try {
+        const sender = currentUser();
+        const receiverId = normalizeId(data?.receiverId, "receiverId");
+        const content = normalizeString(data?.content, "content", 1000);
+        const receiver = await getPublicUserById(receiverId);
+        if (!receiver) return socket.emit("dm_error", { message: "El destinatario ya no existe." });
+        const result = await pool.query(
+          `INSERT INTO direct_messages (sender_id, receiver_id, content)
+           VALUES ($1, $2, $3)
+           RETURNING id, sender_id, receiver_id, content, timestamp`,
+          [sender.id, receiverId, content],
+        );
+        const newDM = {
+          ...result.rows[0],
+          sender_name: sender.username,
+          sender_avatar: sender.avatar_seed,
+        };
+        io.emit(`new_dm_${sender.id}`, newDM);
+        io.emit(`new_dm_${receiverId}`, newDM);
+        io.emit("new_dm", newDM);
+      } catch {
+        socket.emit("dm_error", { message: "Mensaje invalido." });
       }
-      
-      if (!receiverExists) {
-        socket.emit("dm_error", { message: "El destinatario ya no existe." });
-        return;
-      }
-
-      const result = db.prepare("INSERT INTO direct_messages (sender_id, receiver_id, content) VALUES (?, ?, ?)")
-        .run(senderId, receiverId, content);
-      
-      const sender = db.prepare("SELECT username, avatar_seed FROM users WHERE id = ?").get(senderId) as any;
-      
-      const newDM = {
-        id: result.lastInsertRowid,
-        sender_id: senderId,
-        receiver_id: receiverId,
-        content,
-        sender_name: sender.username,
-        sender_avatar: sender.avatar_seed,
-        timestamp: new Date().toISOString()
-      };
-      
-      // Emit to both sender and receiver
-      io.emit(`new_dm_${senderId}`, newDM);
-      io.emit(`new_dm_${receiverId}`, newDM);
-      // Also emit a general new_dm for notifications
-      io.emit("new_dm", newDM);
     });
   });
 
-  // Vite middleware setup
-  if (process.env.NODE_ENV !== "production") {
+  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+    if (!req.path.startsWith("/api")) return next(err);
+    if (err instanceof HttpError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    if ((err as { code?: string })?.code === "23505") {
+      return res.status(409).json({ error: "Registro duplicado" });
+    }
+    console.error("[API]", err);
+    return res.status(500).json({ error: "Error interno del servidor" });
+  });
+
+  if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath, {
+      etag: true,
+      index: false,
+      maxAge: "1h",
+      setHeaders(res) {
+        res.setHeader("X-Content-Type-Options", "nosniff");
+      },
+    }));
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`Servidor CryptoToolbox corriendo en el puerto ${PORT}`);
+    console.log(`CryptoToolbox listening on port ${PORT} with PostgreSQL`);
   });
 }
 
-startServer();
+startServer().catch((error) => {
+  console.error("[BOOT] Failed to start CryptoToolbox:", error);
+  process.exit(1);
+});
