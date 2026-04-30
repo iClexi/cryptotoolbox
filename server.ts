@@ -3,7 +3,6 @@ import express from "express";
 import type { NextFunction, Request, Response } from "express";
 import helmet from "helmet";
 import path from "path";
-import { fileURLToPath } from "url";
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { createServer } from "http";
 import { Pool } from "pg";
@@ -12,9 +11,6 @@ import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import * as nodemailer from "nodemailer";
 import { GoogleGenAI } from "@google/genai";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const isProduction = process.env.NODE_ENV === "production" || process.env.APP_ENV === "production";
 const PORT = Number(process.env.PORT || 3000);

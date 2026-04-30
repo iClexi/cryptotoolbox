@@ -4,7 +4,7 @@
  */
 
 import { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, ReactNode, ChangeEvent, FormEvent } from 'react';
-import { Shield, Clipboard, Check, Search, AlertCircle, Download, Zap, Globe, Hash, Unlock, Type, X, Copy, Trophy, Play, ChevronRight, Sun, Moon, LogOut, User, Fingerprint, Sparkles, Filter, ArrowUpDown, Bell, Settings, Palette, Database, MessageSquare, Send, Eye, EyeOff, ShieldCheck, ShieldAlert, Calendar, Menu, File, Edit2, Trash2, BookOpen, Users, Plus, CheckCircle2, Cpu, Award, Activity as ActivityIcon, Code, Star, Mail, RotateCcw, FileSearch } from 'lucide-react';
+import { Shield, Clipboard, Check, Search, AlertCircle, Download, Zap, Globe, Hash, Unlock, Type, X, Copy, Trophy, Play, ChevronRight, LogOut, User, Fingerprint, Sparkles, Filter, ArrowUpDown, Bell, Settings, Palette, Database, MessageSquare, Send, ShieldCheck, Calendar, File, Edit2, Trash2, BookOpen, Users, Plus, CheckCircle2, Cpu, Award, Code, Star, Mail, RotateCcw, FileSearch } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import CryptoJS from 'crypto-js';
 import { io } from 'socket.io-client';
@@ -1035,7 +1035,7 @@ const RANKS = [
   { name: 'System Administrator', min: Infinity, color: '#8b5cf6', icon: <ShieldCheck className="w-4 h-4" /> },
 ];
 
-const UserProfileModal = ({ user, onClose, isDarkMode }: { user: any, onClose: () => void, isDarkMode: boolean }) => {
+const UserProfileModal = ({ user, onClose }: { user: any, onClose: () => void }) => {
   if (!user) return null;
 
   const currentRank = user.rank || user.user_rank || 'Novice';
@@ -1137,7 +1137,7 @@ const UserProfileModal = ({ user, onClose, isDarkMode }: { user: any, onClose: (
   );
 };
 
-const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProfile: UserProfile, socket: any, onlineUsers: any[], isDarkMode: boolean }) => {
+const ChatWindow = ({ userProfile, socket, onlineUsers }: { userProfile: UserProfile, socket: any, onlineUsers: any[] }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -1580,7 +1580,6 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
             <UserProfileModal
               user={viewingProfile}
               onClose={() => setViewingProfile(null)}
-              isDarkMode={isDarkMode}
             />
           )}
         </AnimatePresence>
@@ -1971,7 +1970,6 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
             <UserProfileModal
               user={viewingProfile}
               onClose={() => setViewingProfile(null)}
-              isDarkMode={false}
             />
           )}
         </AnimatePresence>
@@ -2487,7 +2485,7 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
   );
 };
 
-const ReputationSystem = ({ userProfile, isDarkMode }: { userProfile: UserProfile, isDarkMode: boolean }) => {
+const ReputationSystem = ({ userProfile }: { userProfile: UserProfile }) => {
   const isAdmin = userProfile.rank === 'System Administrator';
   const currentRankIndex = RANKS.findIndex(r => r.name === userProfile.rank) !== -1 ? RANKS.findIndex(r => r.name === userProfile.rank) : 0;
   const nextRank = isAdmin ? null : RANKS[currentRankIndex + 1];
@@ -2594,11 +2592,8 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
   onProfileUpdate: (profile: UserProfile) => void
 }) {
   const [activeTab, setActiveTab] = useState<'home' | 'verify' | 'generate' | 'decode' | 'activity' | 'file' | 'explorer' | 'chat' | 'wiki' | 'messages' | 'visualizer' | 'reputation'>('home');
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [apps, setApps] = useState<any[]>([]);
-  const [isAppEditorOpen, setIsAppEditorOpen] = useState(false);
-  const [editingApp, setEditingApp] = useState<any>(null);
 
   const awardPoints = useCallback(async (points: number) => {
     try {
@@ -3706,7 +3701,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
               exit={{ opacity: 0, scale: 0.98 }}
               className="space-y-8"
             >
-              <ReputationSystem userProfile={userProfile} isDarkMode={isDarkMode} />
+              <ReputationSystem userProfile={userProfile} />
             </motion.div>
           )}
 
@@ -4094,7 +4089,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
               exit={{ opacity: 0, scale: 0.95 }}
               className="max-w-4xl mx-auto"
             >
-              <ChatWindow userProfile={userProfile} socket={socket} onlineUsers={onlineUsers} isDarkMode={isDarkMode} />
+              <ChatWindow userProfile={userProfile} socket={socket} onlineUsers={onlineUsers} />
             </motion.div>
           )}
           {activeTab === 'messages' && (
