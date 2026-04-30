@@ -1,23 +1,19 @@
-/**
+﻿/**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, ReactNode, ChangeEvent, FormEvent } from 'react';
-import { Shield, Clipboard, Check, Search, AlertCircle, Download, Zap, Globe, Hash, Unlock, Type, X, Copy, Trophy, Play, ChevronRight, Sun, Moon, LogOut, User, Fingerprint, Sparkles, Filter, ArrowUpDown, Bell, Settings, Palette, Database, MessageSquare, Send, Eye, EyeOff, ShieldCheck, ShieldAlert, Calendar, Phone, Menu, File, Edit2, Trash2, BookOpen, Users, Plus, CheckCircle2, Cpu, Award, Activity as ActivityIcon, Code, Star, Mail, RotateCcw, FileSearch } from 'lucide-react';
+import { Shield, Clipboard, Check, Search, AlertCircle, Download, Zap, Globe, Hash, Unlock, Type, X, Copy, Trophy, Play, ChevronRight, Sun, Moon, LogOut, User, Fingerprint, Sparkles, Filter, ArrowUpDown, Bell, Settings, Palette, Database, MessageSquare, Send, Eye, EyeOff, ShieldCheck, ShieldAlert, Calendar, Menu, File, Edit2, Trash2, BookOpen, Users, Plus, CheckCircle2, Cpu, Award, Activity as ActivityIcon, Code, Star, Mail, RotateCcw, FileSearch } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI } from "@google/genai";
 import CryptoJS from 'crypto-js';
 import { io } from 'socket.io-client';
 import { Toaster, toast } from 'sonner';
 
-interface AppHashData {
+interface AppPreviewData {
   name: string;
   description: string;
   image: string;
-  md5: string;
-  sha1: string;
-  sha256: string;
 }
 
 interface Activity {
@@ -32,13 +28,14 @@ interface Activity {
 
 interface UserProfile {
   id: number;
-  email: string;
+  email: string | null;
   username: string;
-  first_name: string;
-  last_name: string;
-  birth_date: string;
-  phone: string;
-  gender: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  birth_date?: string | null;
+  phone?: string | null;
+  gender?: string | null;
+  terms_accepted_at?: string | null;
   avatar_seed: string;
   role?: 'user' | 'admin';
   points?: number;
@@ -129,13 +126,16 @@ interface NotificationPrefs {
   verificationMatch: boolean;
 }
 
+type PublicView = 'landing' | 'auth' | 'terms' | 'reset';
+type AuthMode = 'login' | 'register';
+const BRAND_LOGO_SRC = '/logo.png';
+
 const ASSIGNMENT_EXECUTABLES = [
-  'https://the.earth.li/~sgtatham/putty/latest/w64/plink.exe',
-  'https://the.earth.li/~sgtatham/putty/latest/w64/putty.exe',
-  'https://download.virtualbox.org/virtualbox/7.0.8/VirtualBox-7.0.8-156879-Win.exe'
+  'plink.exe',
+  'putty.exe',
+  'VirtualBox-7.0.8-156879-Win.exe'
 ];
 
-const AVATARS = ['👤', '🐱', '🐶', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧', '🐦', '🐤', '🦆', '🦅', '🦉', '🦇', '🐺', '🐗', '🐴', '🦄', '🐝', '🐛', '🦋', '🐌', '🐞', '🐜', '🦟', '🦗', '🕷', '🕸', '🦂', '🐢', '🐍', '🦎', '🦖', '🦕', '🐙', '🦑', '🦐', '🦞', '🦀', '🐡', '🐠', '🐟', '🐬', '🐳', '🐋', '🦈', '🐊', '🐅', '🐆', '🦓', '🦍', '🦧', '🐘', '🦛', '🦏', '🐪', '🐫', '🦒', '🦘', '🐃', '🐂', '🐄', '🐎', '🐖', '🐏', '🐑', '🐐', '🦌', '🐕', '🐩', '🐈', '🐓', '🦃', '🦚', '🦜', '🦢', '🦩', '🕊', '🐇', '🦝', '🦨', '🦡', '🦦', '🦥', '🐁', '🐀', '🐿', '🦔'];
 
 const AssignmentBriefPopup = ({ isOpen, onClose, isDarkMode }: { isOpen: boolean, onClose: () => void, isDarkMode: boolean }) => (
   <AnimatePresence>
@@ -229,45 +229,513 @@ const AssignmentBriefPopup = ({ isOpen, onClose, isDarkMode }: { isOpen: boolean
   </AnimatePresence>
 );
 
-const ProfileSelector = ({ onSelect, isDarkMode }: { onSelect: (profile: UserProfile) => void, isDarkMode: boolean }) => {
+const PublicLanding = ({ onOpenAuth, onShowTerms }: { onOpenAuth: (mode: AuthMode) => void, onShowTerms: () => void }) => {
+  const previewApps = Object.values(APP_PREVIEW_DATA);
+  const currentYear = new Date().getFullYear();
+
+  const features = [
+    { icon: Hash, title: 'Hashing MD5/SHA1/SHA256', body: 'Genera firmas criptograficas de cualquier texto desde el navegador, sin enviar datos a terceros.' },
+    { icon: File, title: 'Verificacion de archivos', body: 'Calcula los tres hashes de un archivo local (hasta 500 MB) por chunks para detectar manipulacion.' },
+    { icon: Unlock, title: 'Decodificacion online', body: 'Consulta hashes contra un diccionario interno y servicios publicos para revelar valores conocidos.' },
+    { icon: BookOpen, title: 'Wiki tecnica', body: 'Consulta el estado, casos de uso y vulnerabilidades de cada algoritmo en una sola tabla.' },
+    { icon: MessageSquare, title: 'Chat colaborativo', body: 'Comparte hallazgos en tiempo real con otros operadores y registra actividad por usuario.' },
+    { icon: Trophy, title: 'Sistema de puntos', body: 'Sube de nivel y desbloquea rangos al usar las herramientas. La actividad queda registrada.' }
+  ];
+
+  const steps = [
+    { n: '01', title: 'Crea tu cuenta', body: 'Registrate con tus datos basicos y un PIN de cuatro digitos. Sin email marketing, sin contrasenas.' },
+    { n: '02', title: 'Compara o genera', body: 'Verifica un binario que ya descargaste o calcula los hashes de un texto y un archivo desde el navegador.' },
+    { n: '03', title: 'Documenta y comparte', body: 'Agrega tus hashes al historial publico, consulta la wiki y registra tu paso por la herramienta.' }
+  ];
+
+  return (
+    <div className="min-h-screen bg-[#050505] text-white font-sans relative overflow-hidden">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-[0.18]"
+        style={{
+          backgroundImage: 'linear-gradient(rgba(16,185,129,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(16,185,129,0.07) 1px, transparent 1px)',
+          backgroundSize: '48px 48px'
+        }}
+      />
+      <div aria-hidden="true" className="pointer-events-none absolute -top-40 -left-40 w-[480px] h-[480px] rounded-full bg-emerald-500/15 blur-[140px]" />
+      <div aria-hidden="true" className="pointer-events-none absolute top-[40%] -right-32 w-[420px] h-[420px] rounded-full bg-cyan-500/10 blur-[140px]" />
+
+      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#050505]/85 backdrop-blur">
+        <div className="max-w-[1600px] mx-auto px-6 lg:px-10 xl:px-16 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-white border border-emerald-500/30 flex items-center justify-center">
+              <img src={BRAND_LOGO_SRC} alt="CryptoToolbox" className="w-6 h-6 object-contain" />
+            </div>
+            <div>
+              <p className="font-black tracking-tight leading-none">CryptoToolbox</p>
+              <p className="text-[11px] text-white/45">cryptotoolbox.iclexi.tech</p>
+            </div>
+          </div>
+          <nav className="flex items-center gap-2">
+            <a href="#features" className="hidden md:inline-flex px-3 py-2 rounded-lg text-xs font-bold text-white/65 hover:text-white hover:bg-white/5 transition-colors">
+              Caracteristicas
+            </a>
+            <a href="#practica" className="hidden md:inline-flex px-3 py-2 rounded-lg text-xs font-bold text-white/65 hover:text-white hover:bg-white/5 transition-colors">
+              Practica
+            </a>
+            <button onClick={onShowTerms} className="hidden sm:inline-flex px-3 py-2 rounded-lg text-xs font-bold text-white/65 hover:text-white hover:bg-white/5 transition-colors">
+              Terminos
+            </button>
+            <button onClick={() => onOpenAuth('login')} className="px-4 py-2 rounded-lg text-xs font-black border border-white/10 hover:bg-white/5 transition-colors">
+              Login
+            </button>
+            <button onClick={() => onOpenAuth('register')} className="px-4 py-2 rounded-lg text-xs font-black bg-emerald-500 text-black hover:bg-emerald-400 transition-colors">
+              Registro
+            </button>
+          </nav>
+        </div>
+      </header>
+
+      <main className="relative">
+        <section className="max-w-[1600px] mx-auto px-6 lg:px-10 xl:px-16 pt-16 pb-20 lg:pt-24 lg:pb-28 grid lg:grid-cols-[0.95fr_1.05fr] gap-12 lg:gap-16 items-center">
+          <div className="space-y-8">
+            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-300 text-[11px] font-black uppercase tracking-[0.22em]">
+              <Sparkles className="w-3.5 h-3.5" />
+              Proyecto academico
+            </span>
+
+            <div className="space-y-5">
+              <h1 className="text-5xl sm:text-6xl lg:text-7xl font-black tracking-tight leading-[0.95]">
+                Verifica la integridad <span className="text-emerald-400">antes</span> de ejecutar.
+              </h1>
+              <p className="text-lg sm:text-xl text-white/68 leading-relaxed max-w-2xl">
+                CryptoToolbox es una plataforma de verificacion de hashes para la practica de Certificados Digitales. Compara binarios reales, genera firmas MD5/SHA1/SHA256 y publica todo bajo HTTPS con certificado Let&apos;s Encrypt.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button onClick={() => onOpenAuth('register')} className="px-6 py-3 rounded-lg bg-emerald-500 text-black text-sm font-black hover:bg-emerald-400 transition-colors flex items-center justify-center gap-2">
+                Crear cuenta gratis
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <button onClick={() => onOpenAuth('login')} className="px-6 py-3 rounded-lg border border-white/12 text-sm font-black hover:bg-white/5 transition-colors">
+                Iniciar sesion
+              </button>
+              <button onClick={onShowTerms} className="px-6 py-3 rounded-lg text-sm font-black text-white/65 hover:text-white hover:bg-white/5 transition-colors">
+                Ver terminos
+              </button>
+            </div>
+
+            <div className="grid sm:grid-cols-3 gap-3 max-w-2xl pt-2">
+              {[
+                ['3', 'Algoritmos soportados', 'MD5, SHA1, SHA256'],
+                ['500 MB', 'Tamano maximo', 'Hashing por chunks'],
+                ['HTTPS', 'Acceso publico', 'Certificado Let\'s Encrypt']
+              ].map(([value, title, label]) => (
+                <div key={title} className="border border-white/10 bg-white/[0.03] rounded-lg p-4">
+                  <p className="text-2xl font-black tracking-tight">{value}</p>
+                  <p className="text-[11px] font-black uppercase tracking-widest text-emerald-300 mt-2">{title}</p>
+                  <p className="text-xs text-white/48 mt-1 leading-relaxed">{label}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="relative">
+            <div className="absolute -inset-1 rounded-2xl bg-gradient-to-br from-emerald-500/20 via-transparent to-cyan-500/20 blur-xl" aria-hidden="true" />
+            <div className="relative border border-white/10 bg-[#0b0f14] rounded-xl shadow-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between bg-white/[0.03]">
+                <div className="flex items-center gap-2 text-xs font-bold text-white/58">
+                  <div className="flex gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-400/70" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400/70" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400/70" />
+                  </div>
+                  <Database className="w-4 h-4 text-emerald-400 ml-2" />
+                  Verificacion controlada
+                </div>
+                <span className="text-[10px] font-black uppercase tracking-widest text-emerald-300">Login requerido</span>
+              </div>
+              <div className="divide-y divide-white/10">
+                {previewApps.map((app) => (
+                  <div key={app.name} className="p-4 sm:p-5 grid sm:grid-cols-[52px_1fr] gap-4">
+                    <img src={app.image} alt={app.name} className="w-12 h-12 rounded-lg object-contain bg-white p-2" />
+                    <div className="min-w-0 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div>
+                          <p className="font-black tracking-tight truncate">{app.name}</p>
+                          <p className="text-xs text-white/45">MD5, SHA1 y SHA256 disponibles dentro de la sesion.</p>
+                        </div>
+                        <span className="inline-flex items-center gap-1 text-[10px] font-black text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-md px-2 py-1 w-fit">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Indexado
+                        </span>
+                      </div>
+                      <div className="font-mono text-[11px] text-white/50 bg-black/35 rounded-lg border border-white/10 p-3 break-all">
+                        sha256: protegido hasta iniciar sesion
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="border-t border-white/10 bg-white/[0.015]">
+          <div className="max-w-[1600px] mx-auto px-6 lg:px-10 xl:px-16 py-16 lg:py-20">
+            <div className="max-w-3xl space-y-3">
+              <span className="text-[11px] font-black uppercase tracking-[0.28em] text-emerald-400">Como funciona</span>
+              <h2 className="text-3xl sm:text-4xl font-black tracking-tight">Tres pasos para verificar un binario.</h2>
+              <p className="text-white/58 leading-relaxed">El flujo esta pensado para que cualquier estudiante o tecnico pueda usarlo sin instalar nada.</p>
+            </div>
+            <div className="grid md:grid-cols-3 gap-4 mt-10">
+              {steps.map((step) => (
+                <div key={step.n} className="border border-white/10 bg-white/[0.03] rounded-xl p-6 space-y-4 hover:border-emerald-500/30 hover:bg-white/[0.05] transition-colors">
+                  <span className="text-emerald-400 font-mono text-sm font-black tracking-widest">{step.n}</span>
+                  <h3 className="text-xl font-black tracking-tight">{step.title}</h3>
+                  <p className="text-sm text-white/60 leading-relaxed">{step.body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="features" className="border-t border-white/10">
+          <div className="max-w-[1600px] mx-auto px-6 lg:px-10 xl:px-16 py-16 lg:py-20">
+            <div className="max-w-3xl space-y-3">
+              <span className="text-[11px] font-black uppercase tracking-[0.28em] text-emerald-400">Caracteristicas</span>
+              <h2 className="text-3xl sm:text-4xl font-black tracking-tight">Todo lo que necesitas para trabajar con hashes.</h2>
+              <p className="text-white/58 leading-relaxed">Desde la verificacion rapida hasta la documentacion tecnica del algoritmo, en una misma plataforma.</p>
+            </div>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-10">
+              {features.map(({ icon: Icon, title, body }) => (
+                <div key={title} className="border border-white/10 bg-white/[0.03] rounded-xl p-6 space-y-3 hover:border-emerald-500/30 transition-colors">
+                  <div className="w-11 h-11 rounded-lg bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center">
+                    <Icon className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <h3 className="text-lg font-black tracking-tight">{title}</h3>
+                  <p className="text-sm text-white/58 leading-relaxed">{body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="practica" className="border-t border-white/10 bg-white/[0.015]">
+          <div className="max-w-[1600px] mx-auto px-6 lg:px-10 xl:px-16 py-16 lg:py-20 grid lg:grid-cols-[1fr_1fr] gap-12 lg:gap-16">
+            <div className="space-y-5">
+              <span className="text-[11px] font-black uppercase tracking-[0.28em] text-emerald-400">Sobre la practica</span>
+              <h2 className="text-3xl sm:text-4xl font-black tracking-tight">Certificados Digitales aplicado a un caso real.</h2>
+              <p className="text-white/62 leading-relaxed">
+                El proyecto demuestra el ciclo completo: obtener los hashes oficiales de tres ejecutables, publicarlos en una pagina web propia y validar el acceso publico bajo HTTPS con certificado SSL emitido por Let&apos;s Encrypt.
+              </p>
+              <div className="space-y-3 pt-2">
+                {[
+                  ['Hashes oficiales', 'MD5, SHA1 y SHA256 calculados con sha256sum/CertUtil sobre los binarios oficiales.'],
+                  ['Servidor publico', 'VM en DigitalOcean con NGINX o Apache sirviendo la aplicacion.'],
+                  ['Dominio gratuito', 'DuckDNS apuntando un Record A a la IP publica de la VM.'],
+                  ['Certificado SSL', 'Let\'s Encrypt automatizado con Certbot y renovacion habilitada.']
+                ].map(([title, body]) => (
+                  <div key={title} className="flex gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-black text-sm">{title}</p>
+                      <p className="text-sm text-white/55 leading-relaxed">{body}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="border border-white/10 bg-[#0b0f14] rounded-xl p-6 space-y-5">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/25">
+                  <FileSearch className="w-5 h-5 text-blue-400" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-widest text-white/48">Ejecutables analizados</p>
+                  <p className="font-black tracking-tight">Referencias protegidas</p>
+                </div>
+              </div>
+
+              <ul className="space-y-3">
+                {ASSIGNMENT_EXECUTABLES.map((url) => {
+                  const filename = url.split('/').pop() || url;
+                  return (
+                    <li key={url}>
+                      <div className="block p-3 rounded-lg border border-white/10 bg-black/30">
+                        <p className="font-mono text-xs font-black text-emerald-300 mb-1">{filename}</p>
+                        <p className="font-mono text-[10px] text-white/40 break-all">URL y hashes visibles solo dentro de la herramienta.</p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              <p className="text-[11px] text-white/40 leading-relaxed">
+                Los detalles tecnicos completos quedan disponibles despues del login para no exponer el index publico.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="border-t border-white/10">
+          <div className="max-w-[1600px] mx-auto px-6 lg:px-10 xl:px-16 py-16 lg:py-20 text-center space-y-6">
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight">
+              Comienza a verificar en menos de un minuto.
+            </h2>
+            <p className="text-white/60 leading-relaxed max-w-2xl mx-auto">
+              Sin instalaciones ni dependencias. Crea tu cuenta, carga un archivo y obten su firma criptografica al instante.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
+              <button onClick={() => onOpenAuth('register')} className="px-7 py-3.5 rounded-lg bg-emerald-500 text-black text-sm font-black hover:bg-emerald-400 transition-colors flex items-center justify-center gap-2">
+                Crear mi cuenta
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <button onClick={() => onOpenAuth('login')} className="px-7 py-3.5 rounded-lg border border-white/12 text-sm font-black hover:bg-white/5 transition-colors">
+                Ya tengo cuenta
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer className="relative border-t border-white/10 bg-black/40">
+        <div className="max-w-[1600px] mx-auto px-6 lg:px-10 xl:px-16 py-10 grid sm:grid-cols-[1fr_auto] gap-6 items-center">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-white border border-emerald-500/30 flex items-center justify-center">
+              <img src={BRAND_LOGO_SRC} alt="CryptoToolbox" className="w-5 h-5 object-contain" />
+            </div>
+            <div>
+              <p className="font-black tracking-tight text-sm">CryptoToolbox</p>
+              <p className="text-[11px] text-white/40">Practica de Certificados Digitales &middot; {currentYear}</p>
+            </div>
+          </div>
+          <nav className="flex items-center gap-1 text-xs">
+            <button onClick={onShowTerms} className="px-3 py-2 rounded-lg text-white/55 hover:text-white hover:bg-white/5 transition-colors font-bold">
+              Terminos
+            </button>
+            <button onClick={() => onOpenAuth('login')} className="px-3 py-2 rounded-lg text-white/55 hover:text-white hover:bg-white/5 transition-colors font-bold">
+              Login
+            </button>
+            <button onClick={() => onOpenAuth('register')} className="px-3 py-2 rounded-lg text-white/55 hover:text-white hover:bg-white/5 transition-colors font-bold">
+              Registro
+            </button>
+          </nav>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
+const TermsPage = ({ onBack, onOpenAuth }: { onBack: () => void, onOpenAuth: (mode: AuthMode) => void }) => (
+  <div className="min-h-screen bg-[#050505] text-white font-sans">
+    <header className="border-b border-white/10">
+      <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+        <button onClick={onBack} className="flex items-center gap-2 text-sm font-bold text-white/65 hover:text-white transition-colors">
+          <ChevronRight className="w-4 h-4 rotate-180" />
+          Volver
+        </button>
+        <button onClick={() => onOpenAuth('register')} className="px-4 py-2 rounded-lg bg-emerald-500 text-black text-xs font-black hover:bg-emerald-400 transition-colors">
+          Crear cuenta
+        </button>
+      </div>
+    </header>
+
+    <main className="max-w-5xl mx-auto px-6 py-12 space-y-8">
+      <div className="space-y-4">
+        <div className="w-12 h-12 rounded-lg bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center">
+          <ShieldCheck className="w-6 h-6 text-emerald-400" />
+        </div>
+        <h1 className="text-4xl sm:text-5xl font-black tracking-tight">Terminos y condiciones</h1>
+        <p className="text-white/62 leading-relaxed max-w-3xl">
+          Estos terminos aplican al uso de CryptoToolbox como herramienta educativa para verificacion de hashes, integridad de archivos y practica de certificados digitales.
+        </p>
+      </div>
+
+      <div className="grid gap-4">
+        {[
+          ['Uso permitido', 'La plataforma debe usarse para aprendizaje, comprobacion de integridad, documentacion tecnica y pruebas autorizadas. No debe emplearse para ocultar, distribuir o validar software malicioso.'],
+          ['Cuentas y seguridad', 'Cada usuario es responsable de su nombre de usuario y PIN. No compartas credenciales y cierra sesion cuando uses equipos compartidos.'],
+          ['Datos registrados', 'La aplicacion puede guardar usuarios, hashes generados, actividad tecnica y mensajes internos para operar la experiencia colaborativa.'],
+          ['Verificacion de hashes', 'Los hashes publicados sirven como referencia tecnica. Antes de ejecutar archivos descargados, compara la firma y valida tambien la fuente oficial.'],
+          ['Disponibilidad', 'El servicio puede cambiar, reiniciarse o limitarse por mantenimiento, seguridad o ajustes academicos del proyecto.'],
+          ['Privacidad', 'No publiques contrasenas reales, llaves privadas, tokens ni datos sensibles dentro de chats, wiki, nombres de archivo o campos de prueba.']
+        ].map(([title, body]) => (
+          <section key={title} className="border border-white/10 bg-white/[0.03] rounded-lg p-5">
+            <h2 className="text-lg font-black mb-2">{title}</h2>
+            <p className="text-sm text-white/62 leading-relaxed">{body}</p>
+          </section>
+        ))}
+      </div>
+    </main>
+  </div>
+);
+
+function AuthInput({
+  label,
+  icon,
+  value,
+  onChange,
+  placeholder = '',
+  disabled,
+  maxLength,
+  minLength,
+  type = 'text',
+  required = false,
+  min,
+  max,
+  hint
+}: {
+  label: string,
+  icon: ReactNode,
+  value: string,
+  onChange: (value: string) => void,
+  placeholder?: string,
+  disabled: boolean,
+  maxLength?: number,
+  minLength?: number,
+  type?: string,
+  required?: boolean,
+  min?: string,
+  max?: string,
+  hint?: string
+}) {
+  return (
+    <label className="space-y-2">
+      <span className="text-[11px] font-black uppercase tracking-widest text-white/45">{label}</span>
+      <div className="relative">
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/35">{icon}</span>
+        <input
+          type={type}
+          required={required}
+          maxLength={maxLength}
+          minLength={minLength}
+          min={min}
+          max={max}
+          className="w-full border border-white/10 rounded-lg py-3 pl-10 pr-4 bg-black/40 text-white placeholder-white/25 focus:ring-2 focus:ring-emerald-500/40 outline-none transition-all"
+          placeholder={placeholder}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          disabled={disabled}
+          autoComplete={type === 'password' ? 'current-password' : undefined}
+        />
+      </div>
+      {hint && <span className="block text-[10px] text-white/35 leading-relaxed">{hint}</span>}
+    </label>
+  );
+}
+
+const NAME_REGEX = /^[A-Za-zÃÃ‰ÃÃ“ÃšÃ‘ÃœÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼]+(?:[ \-'][A-Za-zÃÃ‰ÃÃ“ÃšÃ‘ÃœÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼]+)*$/;
+const sanitizeName = (value: string) => value.replace(/[^A-Za-zÃÃ‰ÃÃ“ÃšÃ‘ÃœÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼ '\-]/g, '');
+
+const todayIso = () => {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return { yyyy, mm, dd };
+};
+
+const getBirthDateBounds = () => {
+  const { yyyy, mm, dd } = todayIso();
+  return {
+    min: `${yyyy - 120}-${mm}-${dd}`,
+    max: `${yyyy - 12}-${mm}-${dd}`
+  };
+};
+
+const computeAge = (iso: string) => {
+  const today = new Date();
+  const birth = new Date(iso);
+  if (Number.isNaN(birth.getTime())) return NaN;
+  let age = today.getFullYear() - birth.getFullYear();
+  const m = today.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age -= 1;
+  return age;
+};
+
+const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
+  onSelect: (profile: UserProfile) => void,
+  onBackToHome: () => void,
+  onShowTerms: () => void,
+  initialMode: AuthMode
+}) => {
+  const [mode, setMode] = useState<AuthMode>(initialMode);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [pin, setPin] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [birthDate, setBirthDate] = useState('');
+  const [gender, setGender] = useState('');
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [avatarSeed, setAvatarSeed] = useState(Math.random().toString(36).substring(7));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryIdentifier, setRecoveryIdentifier] = useState('');
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState('');
+  const [recoveryError, setRecoveryError] = useState('');
+  const isRegister = mode === 'register';
+
+  const birthBounds = useMemo(() => getBirthDateBounds(), []);
+  const birthAge = birthDate ? computeAge(birthDate) : NaN;
+  const isBirthDateValid = !Number.isNaN(birthAge) && birthAge >= 12 && birthAge <= 120;
+  const firstNameValid = NAME_REGEX.test(firstName.trim());
+  const lastNameValid = NAME_REGEX.test(lastName.trim());
+  const trimmedUsername = username.trim();
+  const usernameHasLetter = /[A-Za-z]/.test(trimmedUsername);
+  const isUsernameValid = trimmedUsername.length >= 4 && usernameHasLetter;
+
+  const canSubmit = isUsernameValid
+    && pin.length === 4
+    && (!isRegister || Boolean(
+      email.trim()
+      && firstName.trim() && firstNameValid
+      && lastName.trim() && lastNameValid
+      && birthDate && isBirthDateValid
+      && gender
+      && termsAccepted
+    ));
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!username.trim()) return;
-    if (pin.length !== 4) {
-      setError('El PIN debe ser de 4 dígitos');
+    if (!canSubmit) {
+      if (!isUsernameValid && trimmedUsername.length >= 4 && !usernameHasLetter) {
+        setError('El usuario no puede ser solo numeros.');
+      }
       return;
     }
-
+    if (isRegister) {
+      if (!firstNameValid || !lastNameValid) {
+        setError('El nombre y el apellido solo pueden contener letras.');
+        return;
+      }
+      if (!isBirthDateValid) {
+        setError('Debes tener entre 12 y 120 aÃ±os.');
+        return;
+      }
+    }
     setLoading(true);
     setError('');
 
     try {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: username.trim(),
-          email: email.trim(),
+          email: isRegister ? email.trim() : undefined,
           avatarSeed,
-          pin
+          pin,
+          firstName: isRegister ? firstName.trim() : undefined,
+          lastName: isRegister ? lastName.trim() : undefined,
+          birthDate: isRegister ? birthDate : undefined,
+          gender: isRegister ? gender : undefined,
+          termsAccepted: isRegister ? termsAccepted : undefined
         })
       });
-
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Error al conectar');
-      }
-
+      if (!res.ok) throw new Error(data.error || 'Error al conectar');
       onSelect(data.user);
     } catch (err: any) {
       setError(err.message);
@@ -276,109 +744,281 @@ const ProfileSelector = ({ onSelect, isDarkMode }: { onSelect: (profile: UserPro
     }
   };
 
-  const generateNewAvatar = () => {
-    setAvatarSeed(Math.random().toString(36).substring(7));
+  const handleForgotPassword = async () => {
+    if (!recoveryIdentifier.trim()) {
+      setRecoveryError('Escribe tu usuario o correo registrado.');
+      return;
+    }
+    setRecoveryLoading(true);
+    setRecoveryError('');
+    setRecoveryMessage('');
+
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: recoveryIdentifier.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo procesar la solicitud');
+      setRecoveryMessage(data.message || 'Si la cuenta existe, recibiras un enlace para restablecer el PIN.');
+    } catch (err: any) {
+      setRecoveryError(err.message);
+    } finally {
+      setRecoveryLoading(false);
+    }
   };
 
   return (
-    <div className={`min-h-screen flex items-center justify-center p-4 font-sans transition-colors duration-500 ${isDarkMode ? 'bg-[#050505]' : 'bg-gray-100'}`}>
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className={`max-w-md w-full border rounded-3xl p-8 shadow-2xl relative transition-colors duration-500 ${isDarkMode ? 'bg-[#111] border-white/10' : 'bg-white border-black/5'}`}
-      >
-        <div className="text-center mb-8 mt-4">
-          <div className={`inline-flex p-4 rounded-2xl mb-4 ${isDarkMode ? 'bg-indigo-500/10' : 'bg-indigo-50'}`}>
-            <User className={`w-10 h-10 ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`} />
-          </div>
-          <h1 className={`text-3xl font-bold tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-            Crea tu Perfil
-          </h1>
-          <p className={`mt-2 ${isDarkMode ? 'text-white/60' : 'text-gray-500'}`}>
-            Elige un nombre de usuario y un avatar para unirte
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="flex flex-col items-center gap-4">
-            <div className="relative group">
-              <img 
-                src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${avatarSeed}`}
-                alt="Avatar"
-                className={`w-24 h-24 rounded-full border-4 ${isDarkMode ? 'bg-[#1a1a1a] border-white/10' : 'bg-gray-100 border-white shadow-sm'}`}
-              />
-              <button
-                type="button"
-                onClick={generateNewAvatar}
-                className="absolute bottom-0 right-0 p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full shadow-lg transition-colors"
-                title="Generar nuevo avatar"
-              >
-                <Sparkles className="w-4 h-4" />
-              </button>
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 lg:p-10 font-sans bg-[#050505] text-white">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-[1400px] w-full border border-white/10 rounded-xl shadow-2xl relative overflow-hidden bg-[#0b0f14]">
+        <div className="grid lg:grid-cols-[0.86fr_1.14fr]">
+          <div className="p-8 lg:p-10 border-b lg:border-b-0 lg:border-r border-white/10 bg-white/[0.03]">
+            <button onClick={onBackToHome} className="mb-8 flex items-center gap-2 text-xs font-black text-white/50 hover:text-white transition-colors">
+              <ChevronRight className="w-4 h-4 rotate-180" />
+              Volver al inicio
+            </button>
+            <div className="space-y-5">
+              <div className="w-14 h-14 rounded-lg bg-white border border-emerald-500/25 flex items-center justify-center">
+                <img src={BRAND_LOGO_SRC} alt="CryptoToolbox" className="w-8 h-8 object-contain" />
+              </div>
+              <div>
+                <h1 className="text-4xl font-black tracking-tight">
+                  {isRegister ? 'Crear cuenta segura' : 'Acceso de operador'}
+                </h1>
+                <p className="mt-3 text-sm text-white/60 leading-relaxed">
+                  {isRegister
+                    ? 'Completa tu perfil para usar historial, chat, reputacion y funciones colaborativas.'
+                    : 'Entra con tu usuario y PIN. Si el usuario no existe, cambia a registro para crear el perfil completo.'}
+                </p>
+              </div>
+              <div className="grid gap-3 pt-4">
+                <div className="flex items-center gap-3 text-sm text-white/62">
+                  <div className="w-8 h-8 rounded-lg bg-black/25 border border-white/10 flex items-center justify-center">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  Sesiones firmadas
+                </div>
+                <div className="flex items-center gap-3 text-sm text-white/62">
+                  <div className="w-8 h-8 rounded-lg bg-black/25 border border-white/10 flex items-center justify-center">
+                    <Unlock className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  PIN protegido
+                </div>
+                <div className="flex items-center gap-3 text-sm text-white/62">
+                  <div className="w-8 h-8 rounded-lg bg-black/25 border border-white/10 flex items-center justify-center">
+                    <Database className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  Base PostgreSQL
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className={`text-xs font-semibold uppercase tracking-wider px-1 ${isDarkMode ? 'text-white/60' : 'text-gray-500'}`}>
-              Nombre de Usuario
-            </label>
-            <div className="relative">
-              <Fingerprint className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${isDarkMode ? 'text-white/40' : 'text-gray-400'}`} />
-              <input
-                type="text"
-                required
-                maxLength={30}
-                className={`w-full border rounded-xl py-3 pl-10 pr-4 focus:ring-2 focus:ring-indigo-500 outline-none transition-all ${
-                  isDarkMode 
-                    ? 'bg-black/50 border-white/10 text-white placeholder-white/30' 
-                    : 'bg-white border-black/10 text-gray-900 placeholder-gray-400'
-                }`}
-                placeholder="usuario123"
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                disabled={loading}
-              />
-            </div>
-            <div className="space-y-2">
-              <label className={`text-xs font-semibold uppercase tracking-wider px-1 ${isDarkMode ? 'text-white/60' : 'text-gray-500'}`}>
-                PIN de Seguridad (4 dígitos)
-              </label>
-              <div className="relative">
-                <Unlock className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${isDarkMode ? 'text-white/40' : 'text-gray-400'}`} />
-                <input
-                  type="password"
-                  required
-                  maxLength={4}
-                  pattern="\d{4}"
-                  className={`w-full border rounded-xl py-3 pl-10 pr-4 focus:ring-2 focus:ring-indigo-500 outline-none transition-all ${
-                    isDarkMode 
-                      ? 'bg-black/50 border-white/10 text-white placeholder-white/30' 
-                      : 'bg-white border-black/10 text-gray-900 placeholder-gray-400'
-                  }`}
-                  placeholder="****"
-                  value={pin}
-                  onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                  disabled={loading}
-                />
+          <div className="p-6 sm:p-8 lg:p-10">
+            <div className="flex items-center justify-between gap-4 mb-8">
+              <div className="inline-flex p-1 rounded-lg bg-black/30 border border-white/10">
+                {(['login', 'register'] as AuthMode[]).map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => {
+                      setMode(item);
+                      setError('');
+                      setRecoveryOpen(false);
+                      setRecoveryMessage('');
+                      setRecoveryError('');
+                    }}
+                    className={`px-4 py-2 rounded-md text-xs font-black transition-colors ${mode === item ? 'bg-white text-black' : 'text-white/55 hover:text-white'}`}
+                  >
+                    {item === 'login' ? 'Login' : 'Registro'}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {error && (
-              <p className="text-red-500 text-xs mt-1 px-1">{error}</p>
-            )}
-          </div>
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div className="grid sm:grid-cols-2 gap-4">
+                <AuthInput label="Usuario" icon={<Fingerprint className="w-4 h-4" />} value={username} onChange={setUsername} placeholder="iclexi_admin" disabled={loading} maxLength={40} minLength={4} required hint={isRegister ? 'Minimo 4 caracteres y al menos una letra.' : undefined} />
+                <AuthInput label="PIN de seguridad" icon={<Unlock className="w-4 h-4" />} value={pin} onChange={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder="0000" disabled={loading} maxLength={4} type="password" required />
+              </div>
 
-          <button
-            type="submit"
-            disabled={!username.trim() || pin.length !== 4 || loading}
-            className="w-full py-3 rounded-xl font-bold text-black bg-white hover:bg-gray-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg active:scale-[0.98]"
-          >
-            {loading ? (
-              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : (
-              'Entrar'
-            )}
+              {isRegister && (
+                <div className="space-y-5">
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <AuthInput label="Nombre" icon={<User className="w-4 h-4" />} value={firstName} onChange={(v) => setFirstName(sanitizeName(v))} placeholder="Nombre" disabled={loading} maxLength={80} required hint="Solo letras, espacios, apostrofes y guiones." />
+                    <AuthInput label="Apellido" icon={<User className="w-4 h-4" />} value={lastName} onChange={(v) => setLastName(sanitizeName(v))} placeholder="Apellido" disabled={loading} maxLength={80} required hint="Solo letras, espacios, apostrofes y guiones." />
+                  </div>
+                  <AuthInput label="Correo electronico" icon={<Mail className="w-4 h-4" />} value={email} onChange={setEmail} placeholder="correo@dominio.com" disabled={loading} maxLength={254} type="email" required />
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <AuthInput label="Fecha de nacimiento" icon={<Calendar className="w-4 h-4" />} value={birthDate} onChange={setBirthDate} disabled={loading} type="date" required min={birthBounds.min} max={birthBounds.max} hint="Edad permitida: 12 a 120 aÃ±os." />
+                    <label className="space-y-2">
+                      <span className="text-[11px] font-black uppercase tracking-widest text-white/45">Genero</span>
+                      <select required value={gender} onChange={e => setGender(e.target.value)} disabled={loading} className="w-full border border-white/10 rounded-lg py-3 px-3 bg-black/40 text-white outline-none focus:ring-2 focus:ring-emerald-500/40 transition-all">
+                        <option value="">Seleccionar</option>
+                        <option value="masculino">Masculino</option>
+                        <option value="femenino">Femenino</option>
+                        <option value="otro">Otro</option>
+                        <option value="prefiero_no_decir">Prefiero no decir</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-center gap-4 rounded-lg border border-white/10 bg-black/25 p-4">
+                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${avatarSeed}`} alt="Avatar" className="w-16 h-16 rounded-full border border-white/10 bg-white" />
+                    <div className="flex-1 text-center sm:text-left">
+                      <p className="text-sm font-black">Avatar publico</p>
+                      <p className="text-xs text-white/45">Se usara en actividad, chat y mensajes.</p>
+                    </div>
+                    <button type="button" onClick={() => setAvatarSeed(Math.random().toString(36).substring(7))} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-black hover:bg-white/5 transition-colors">
+                      <Sparkles className="w-4 h-4 inline mr-1" />
+                      Cambiar
+                    </button>
+                  </div>
+
+                  <label className="flex items-start gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-4">
+                    <input type="checkbox" checked={termsAccepted} onChange={e => setTermsAccepted(e.target.checked)} className="mt-1 accent-emerald-500" disabled={loading} required />
+                    <span className="text-sm text-white/70 leading-relaxed">
+                      Acepto los terminos y condiciones de CryptoToolbox.
+                      <button type="button" onClick={onShowTerms} className="ml-1 text-emerald-300 font-black hover:text-emerald-200">
+                        Leer terminos
+                      </button>
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              {error && <p className="text-red-300 text-xs border border-red-500/25 bg-red-500/10 rounded-lg p-3">{error}</p>}
+
+              <button type="submit" disabled={!canSubmit || loading} className="w-full py-3 rounded-lg font-black text-black bg-emerald-500 hover:bg-emerald-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/10 active:scale-[0.98]">
+                {loading ? <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" /> : (isRegister ? 'Crear cuenta y entrar' : 'Entrar')}
+              </button>
+
+              {!isRegister && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-2 text-xs text-white/45">
+                    <span>Si aun no tienes cuenta, usa Registro y acepta los terminos.</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecoveryOpen((value) => !value);
+                        setRecoveryMessage('');
+                        setRecoveryError('');
+                      }}
+                      className="font-black text-emerald-300 hover:text-emerald-200"
+                    >
+                      Olvide mi PIN
+                    </button>
+                  </div>
+
+                  {recoveryOpen && (
+                    <div className="rounded-lg border border-white/10 bg-black/25 p-4 space-y-3">
+                      <div>
+                        <p className="text-sm font-black">Recuperar acceso</p>
+                        <p className="text-xs text-white/45 leading-relaxed">Te enviaremos un enlace al correo registrado para crear un PIN nuevo.</p>
+                      </div>
+                      <AuthInput
+                        label="Usuario o correo"
+                        icon={<Mail className="w-4 h-4" />}
+                        value={recoveryIdentifier}
+                        onChange={setRecoveryIdentifier}
+                        placeholder="usuario o correo@dominio.com"
+                        disabled={recoveryLoading}
+                        maxLength={254}
+                      />
+                      {recoveryError && <p className="text-red-300 text-xs border border-red-500/25 bg-red-500/10 rounded-lg p-3">{recoveryError}</p>}
+                      {recoveryMessage && <p className="text-emerald-300 text-xs border border-emerald-500/25 bg-emerald-500/10 rounded-lg p-3">{recoveryMessage}</p>}
+                      <button
+                        type="button"
+                        onClick={handleForgotPassword}
+                        disabled={recoveryLoading || !recoveryIdentifier.trim()}
+                        className="w-full py-3 rounded-lg font-black text-white border border-white/10 hover:bg-white/5 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {recoveryLoading ? <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" /> : 'Enviar enlace de recuperacion'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </form>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const ResetPinPage = ({ token, onBackToLogin }: { token: string, onBackToLogin: () => void }) => {
+  const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (pin.length !== 4 || confirmPin.length !== 4) {
+      setError('El PIN debe tener 4 digitos.');
+      return;
+    }
+    if (pin !== confirmPin) {
+      setError('Los PIN no coinciden.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, pin })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo actualizar el PIN');
+      setSuccess(data.message || 'PIN actualizado correctamente.');
+      window.history.replaceState({}, '', window.location.pathname);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 font-sans bg-[#050505] text-white">
+      <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-lg border border-white/10 rounded-xl bg-[#0b0f14] shadow-2xl overflow-hidden">
+        <div className="p-6 sm:p-8 border-b border-white/10 bg-white/[0.03]">
+          <button onClick={onBackToLogin} className="mb-8 flex items-center gap-2 text-xs font-black text-white/50 hover:text-white transition-colors">
+            <ChevronRight className="w-4 h-4 rotate-180" />
+            Volver al login
           </button>
+          <div className="w-14 h-14 rounded-lg bg-white border border-emerald-500/25 flex items-center justify-center mb-5">
+            <img src={BRAND_LOGO_SRC} alt="CryptoToolbox" className="w-8 h-8 object-contain" />
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-black tracking-tight">Crear PIN nuevo</h1>
+          <p className="mt-3 text-sm text-white/58 leading-relaxed">
+            Define un PIN de cuatro digitos. El enlace solo puede usarse una vez y expira por seguridad.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 sm:p-8 space-y-5">
+          <AuthInput label="PIN nuevo" icon={<RotateCcw className="w-4 h-4" />} value={pin} onChange={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder="0000" disabled={loading || Boolean(success)} maxLength={4} type="password" required />
+          <AuthInput label="Confirmar PIN" icon={<Unlock className="w-4 h-4" />} value={confirmPin} onChange={(value) => setConfirmPin(value.replace(/\D/g, '').slice(0, 4))} placeholder="0000" disabled={loading || Boolean(success)} maxLength={4} type="password" required />
+
+          {error && <p className="text-red-300 text-xs border border-red-500/25 bg-red-500/10 rounded-lg p-3">{error}</p>}
+          {success && <p className="text-emerald-300 text-xs border border-emerald-500/25 bg-emerald-500/10 rounded-lg p-3">{success}</p>}
+
+          <button type="submit" disabled={pin.length !== 4 || confirmPin.length !== 4 || loading || Boolean(success)} className="w-full py-3 rounded-lg font-black text-black bg-emerald-500 hover:bg-emerald-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/10 active:scale-[0.98]">
+            {loading ? <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" /> : 'Guardar PIN nuevo'}
+          </button>
+          {success && (
+            <button type="button" onClick={onBackToLogin} className="w-full py-3 rounded-lg border border-white/10 text-sm font-black hover:bg-white/5 transition-colors">
+              Ir al login
+            </button>
+          )}
         </form>
       </motion.div>
     </div>
@@ -408,7 +1048,7 @@ const UserProfileModal = ({ user, onClose, isDarkMode }: { user: any, onClose: (
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
@@ -423,7 +1063,7 @@ const UserProfileModal = ({ user, onClose, isDarkMode }: { user: any, onClose: (
         style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}
       >
         <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500"></div>
-        <button 
+        <button
           onClick={onClose}
           className="absolute top-4 right-4 p-2 rounded-xl hover:bg-black/5 transition-colors"
         >
@@ -433,7 +1073,7 @@ const UserProfileModal = ({ user, onClose, isDarkMode }: { user: any, onClose: (
         <div className="flex flex-col items-center text-center">
           <div className="relative mb-6">
             <div className="w-24 h-24 rounded-[2rem] overflow-hidden border-4 border-emerald-500/20 shadow-xl">
-              <img 
+              <img
                 src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.avatar_seed || user.user_avatar}`}
                 alt={user.username || user.user_name}
                 className="w-full h-full object-cover"
@@ -473,23 +1113,23 @@ const UserProfileModal = ({ user, onClose, isDarkMode }: { user: any, onClose: (
             <div className="text-left p-4 rounded-2xl bg-black/5 border border-white/5">
               <div className="flex justify-between items-end mb-2">
                 <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Progreso</p>
-                <span className="text-[10px] font-mono font-bold opacity-60">{points} / {nextRank ? nextRank.min : '∞'}</span>
+                <span className="text-[10px] font-mono font-bold opacity-60">{points} / {nextRank ? nextRank.min : 'âˆž'}</span>
               </div>
               <div className="h-2 w-full bg-black/10 rounded-full overflow-hidden p-0.5">
-                <motion.div 
+                <motion.div
                   initial={{ width: 0 }}
                   animate={{ width: `${progress}%` }}
                   className="h-full bg-gradient-to-r from-emerald-500 to-blue-500 rounded-full shadow-lg"
                 />
               </div>
               <p className="text-[9px] mt-2 opacity-40 font-bold uppercase tracking-tighter">
-                Siguiente: {nextRank ? nextRank.name : 'Nivel Máximo'}
+                Siguiente: {nextRank ? nextRank.name : 'Nivel MÃ¡ximo'}
               </p>
             </div>
           </div>
 
           <p className="text-xs opacity-60 leading-relaxed italic">
-            "Operador verificado en la red CryptoToolbox. Especialista en protocolos de seguridad y análisis de integridad."
+            "Operador verificado en la red CryptoToolbox. Especialista en protocolos de seguridad y anÃ¡lisis de integridad."
           </p>
         </div>
       </motion.div>
@@ -532,20 +1172,17 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
     fetchMessages();
 
     if (socket) {
-      console.log("Setting up socket listeners in ChatWindow. Socket connected:", socket.connected);
-      
+
       // Ensure user is online for the server
       if (socket.connected) {
         socket.emit('user_online', userProfile);
       } else {
         socket.once('connect', () => {
-          console.log("Socket connected in ChatWindow, emitting user_online");
           socket.emit('user_online', userProfile);
         });
       }
 
       socket.on('new_message', (message: Message) => {
-        console.log("Received new_message in ChatWindow:", message);
         setMessages(prev => {
           if (prev.find(m => m.id === message.id)) return prev;
           return [...prev, message];
@@ -553,13 +1190,13 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
       });
 
       socket.on('message_edited', ({ messageId, newContent }: { messageId: number, newContent: string }) => {
-        setMessages(prev => prev.map(msg => 
+        setMessages(prev => prev.map(msg =>
           msg.id === messageId ? { ...msg, content: newContent, is_edited: 1 } : msg
         ));
       });
 
       socket.on('message_deleted', ({ messageId }: { messageId: number }) => {
-        setMessages(prev => prev.map(msg => 
+        setMessages(prev => prev.map(msg =>
           msg.id === messageId ? { ...msg, content: 'Mensaje eliminado', is_deleted: 1 } : msg
         ));
       });
@@ -607,22 +1244,18 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
 
   const handleSendMessage = (e: FormEvent) => {
     e.preventDefault();
-    console.log("handleSendMessage called, newMessage:", newMessage, "socket:", !!socket, "connected:", socket?.connected);
-    
+
     if (!newMessage.trim()) {
-      console.log("Message is empty, not sending.");
       return;
     }
-    
+
     if (!socket) {
-      console.log("Socket is null, cannot send message.");
-      toast.error("Error de conexión: No hay socket.");
+      toast.error("Error de conexiÃ³n: No hay socket.");
       return;
     }
 
     if (!socket.connected) {
-      console.log("Socket is disconnected, attempting to send anyway (will buffer if configured).");
-      toast.warning("El chat está desconectado. Intentando reconectar...");
+      toast.warning("El chat estÃ¡ desconectado. Intentando reconectar...");
     }
 
     const messagePayload = {
@@ -633,11 +1266,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
       content: newMessage
     };
 
-    console.log("Emitting send_message with payload:", messagePayload);
-    
-    socket.emit('send_message', messagePayload, (ack: any) => {
-      console.log("Server acknowledged send_message:", ack);
-    });
+    socket.emit('send_message', messagePayload);
 
     setNewMessage('');
     socket.emit('stop_typing', userProfile);
@@ -685,7 +1314,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
           {onlineUsers.map((user) => (
             <div key={user.id} className="flex items-center gap-3 p-2 rounded-xl hover:bg-black/5 transition-colors group">
               <div className="relative">
-                <img 
+                <img
                   src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.avatar_seed}`}
                   alt={user.username}
                   className="w-8 h-8 rounded-full border border-black/5"
@@ -714,7 +1343,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
             </div>
             <div>
               <h3 className="font-bold" style={{ color: 'var(--text-color)' }}>Chat Comunitario</h3>
-              <p className="text-xs" style={{ color: 'var(--muted-color)' }}>Interactúa con otros expertos</p>
+              <p className="text-xs" style={{ color: 'var(--muted-color)' }}>InteractÃºa con otros expertos</p>
             </div>
           </div>
         </div>
@@ -722,7 +1351,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
         <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
           {isLoading ? (
             <div className="flex items-center justify-center h-full">
-              <motion.div 
+              <motion.div
                 animate={{ rotate: 360 }}
                 transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                 className="w-8 h-8 border-2 border-t-transparent rounded-full"
@@ -731,7 +1360,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
             </div>
           ) : messages.length === 0 ? (
             <div className="text-center py-12">
-              <p style={{ color: 'var(--muted-color)' }}>No hay mensajes aún. ¡Sé el primero!</p>
+              <p style={{ color: 'var(--muted-color)' }}>No hay mensajes aÃºn. Â¡SÃ© el primero!</p>
             </div>
           ) : (
             messages.map((msg) => (
@@ -741,7 +1370,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
                 key={msg.id}
                 className={`flex gap-3 ${msg.user_id === userProfile.id ? 'flex-row-reverse' : ''}`}
               >
-                <img 
+                <img
                   src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${msg.user_avatar}`}
                   alt="Avatar"
                   className="w-8 h-8 rounded-full cursor-pointer hover:scale-110 transition-transform"
@@ -761,7 +1390,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
                       {msg.is_edited ? ' (editado)' : ''}
                     </span>
                   </div>
-                  
+
                   {editingMessageId === msg.id ? (
                     <div className="w-full space-y-2">
                       <textarea
@@ -772,14 +1401,14 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
                         rows={3}
                       />
                       <div className="flex justify-end gap-3 mt-1">
-                        <button 
+                        <button
                           onClick={() => setEditingMessageId(null)}
                           className="text-xs font-bold px-4 py-2 rounded-xl opacity-60 hover:opacity-100 hover:bg-black/5 transition-all"
                           style={{ color: 'var(--text-color)' }}
                         >
                           Cancelar
                         </button>
-                        <button 
+                        <button
                           onClick={handleSaveEdit}
                           className="text-xs font-bold px-4 py-2 rounded-xl text-white shadow-lg shadow-emerald-500/20 transition-all active:scale-95"
                           style={{ backgroundColor: 'var(--accent-color)' }}
@@ -791,27 +1420,27 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
                   ) : (
                     <div className="group relative">
                       <div className={`p-3 rounded-2xl text-sm ${
-                        msg.user_id === userProfile.id 
-                          ? 'rounded-tr-none' 
+                        msg.user_id === userProfile.id
+                          ? 'rounded-tr-none'
                           : 'rounded-tl-none border'
-                      } ${msg.is_deleted ? 'italic opacity-50' : ''}`} style={{ 
+                      } ${msg.is_deleted ? 'italic opacity-50' : ''}`} style={{
                         backgroundColor: msg.user_id === userProfile.id ? 'var(--accent-color)' : 'var(--bg-color)',
                         color: msg.user_id === userProfile.id ? '#fff' : 'var(--text-color)',
                         borderColor: msg.user_id === userProfile.id ? 'transparent' : 'var(--border-color)'
                       }}>
                         {msg.content}
                       </div>
-                      
+
                       {(msg.user_id === userProfile.id || userProfile.role === 'admin') && !msg.is_deleted && (
                         <div className={`absolute top-0 ${msg.user_id === userProfile.id ? '-left-20' : '-right-20'} opacity-0 group-hover:opacity-100 transition-opacity flex gap-2`}>
-                          <button 
+                          <button
                             onClick={() => handleEditMessage(msg)}
                             className="p-2 rounded-xl hover:bg-black/10 transition-colors"
                             style={{ color: 'var(--muted-color)' }}
                           >
                             <Edit2 className="w-4 h-4" />
                           </button>
-                          <button 
+                          <button
                             onClick={() => setDeletingMessageId(msg.id)}
                             className="p-2 rounded-xl hover:bg-red-500/10 transition-colors"
                             style={{ color: '#ef4444' }}
@@ -832,7 +1461,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
         <AnimatePresence>
           {deletingMessageId !== null && (
             <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -850,19 +1479,19 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
                 <div className="w-20 h-20 bg-red-500/10 rounded-3xl flex items-center justify-center mx-auto mb-6">
                   <Trash2 className="w-10 h-10 text-red-500" />
                 </div>
-                <h4 className="text-2xl font-bold mb-3 text-center" style={{ color: 'var(--text-color)' }}>¿Eliminar mensaje?</h4>
+                <h4 className="text-2xl font-bold mb-3 text-center" style={{ color: 'var(--text-color)' }}>Â¿Eliminar mensaje?</h4>
                 <p className="text-sm mb-8 text-center opacity-70 leading-relaxed" style={{ color: 'var(--text-color)' }}>
-                  Esta acción es permanente y el mensaje desaparecerá para todos los usuarios del chat.
+                  Esta acciÃ³n es permanente y el mensaje desaparecerÃ¡ para todos los usuarios del chat.
                 </p>
                 <div className="grid grid-cols-2 gap-4">
-                  <button 
+                  <button
                     onClick={() => setDeletingMessageId(null)}
                     className="py-4 text-sm font-bold rounded-2xl border transition-all active:scale-95 hover:bg-black/5"
                     style={{ color: 'var(--text-color)', borderColor: 'var(--border-color)', backgroundColor: 'var(--surface-color)' }}
                   >
                     Cancelar
                   </button>
-                  <button 
+                  <button
                     onClick={() => deletingMessageId !== null && handleDeleteMessage(deletingMessageId)}
                     className="py-4 text-sm font-bold bg-red-500 hover:bg-red-600 text-white rounded-2xl shadow-xl shadow-red-500/40 transition-all active:scale-95"
                   >
@@ -885,13 +1514,13 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
                 exit={{ opacity: 0, y: 10 }}
                 className="flex items-center gap-2 mb-1"
               >
-                <img 
+                <img
                   src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.avatar_seed}`}
                   alt={user.username}
                   className="w-4 h-4 rounded-full"
                 />
                 <span className="text-[10px] font-bold opacity-50" style={{ color: 'var(--text-color)' }}>
-                  {user.username} está escribiendo...
+                  {user.username} estÃ¡ escribiendo...
                 </span>
                 <div className="flex gap-1">
                   <motion.div animate={{ opacity: [0, 1, 0] }} transition={{ duration: 1, repeat: Infinity }} className="w-1 h-1 rounded-full bg-emerald-500" />
@@ -912,8 +1541,8 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
                 onChange={(e) => setNewMessage(e.target.value)}
                 placeholder="Escribe un mensaje..."
                 className="w-full border rounded-2xl py-3 pl-4 pr-24 outline-none transition-all"
-                style={{ 
-                  backgroundColor: 'var(--bg-color)', 
+                style={{
+                  backgroundColor: 'var(--bg-color)',
                   borderColor: 'var(--border-color)',
                   color: 'var(--text-color)'
                 }}
@@ -948,10 +1577,10 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
 
         <AnimatePresence>
           {viewingProfile && (
-            <UserProfileModal 
-              user={viewingProfile} 
-              onClose={() => setViewingProfile(null)} 
-              isDarkMode={isDarkMode} 
+            <UserProfileModal
+              user={viewingProfile}
+              onClose={() => setViewingProfile(null)}
+              isDarkMode={isDarkMode}
             />
           )}
         </AnimatePresence>
@@ -960,22 +1589,22 @@ const ChatWindow = ({ userProfile, socket, onlineUsers, isDarkMode }: { userProf
   );
 };
 
-const ConfirmationModal = ({ 
-  isOpen, 
-  onClose, 
-  onConfirm, 
-  title, 
-  description, 
-  confirmLabel = "Confirmar", 
+const ConfirmationModal = ({
+  isOpen,
+  onClose,
+  onConfirm,
+  title,
+  description,
+  confirmLabel = "Confirmar",
   cancelLabel = "Cancelar",
   variant = "danger"
-}: { 
-  isOpen: boolean; 
-  onClose: () => void; 
-  onConfirm: () => void; 
-  title: string; 
-  description: string; 
-  confirmLabel?: string; 
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title: string;
+  description: string;
+  confirmLabel?: string;
   cancelLabel?: string;
   variant?: "danger" | "warning" | "info"
 }) => {
@@ -989,7 +1618,7 @@ const ConfirmationModal = ({
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
@@ -1012,14 +1641,14 @@ const ConfirmationModal = ({
           {description}
         </p>
         <div className="grid grid-cols-2 gap-4">
-          <button 
+          <button
             onClick={onClose}
             className="py-4 text-sm font-bold rounded-2xl border transition-all active:scale-95 hover:bg-black/5"
             style={{ color: 'var(--text-color)', borderColor: 'var(--border-color)', backgroundColor: 'var(--surface-color)' }}
           >
             {cancelLabel}
           </button>
-          <button 
+          <button
             onClick={() => {
               onConfirm();
               onClose();
@@ -1086,7 +1715,7 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
         }
       };
       socket.on('new_dm', handleNewDM);
-      
+
       const handleUserDeleted = ({ userId }: { userId: number }) => {
         setUsers(prev => prev.filter(u => u.id !== userId));
         if (selectedUser?.id === userId) {
@@ -1155,7 +1784,7 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
                 e.stopPropagation();
                 setViewingProfile(user);
               }}>
-                <img 
+                <img
                   src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.avatar_seed}`}
                   alt={user.username}
                   className="w-10 h-10 rounded-full border border-black/5 cursor-pointer hover:scale-110 transition-transform"
@@ -1178,7 +1807,7 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
                   )}
                 </div>
                 <p className={`text-[10px] opacity-70 ${selectedUser?.id === user.id ? 'text-white' : ''}`}>
-                  Ver conversación
+                  Ver conversaciÃ³n
                 </p>
               </div>
               {userProfile.role === 'admin' && user.role !== 'admin' && (
@@ -1219,8 +1848,8 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
                   }
                 });
               }}
-              title="¿Eliminar usuario?"
-              description={`¿Estás seguro de eliminar a "${userToDelete.username}"? Esta acción es permanente.`}
+              title="Â¿Eliminar usuario?"
+              description={`Â¿EstÃ¡s seguro de eliminar a "${userToDelete.username}"? Esta acciÃ³n es permanente.`}
               confirmLabel="Eliminar"
             />
           )}
@@ -1233,7 +1862,7 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
           <>
             <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-color)', backgroundColor: 'rgba(0,0,0,0.05)' }}>
               <div className="flex items-center gap-3">
-                <img 
+                <img
                   src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedUser.avatar_seed}`}
                   alt={selectedUser.username}
                   className="w-10 h-10 rounded-full"
@@ -1251,7 +1880,7 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
             <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
               {isLoading ? (
                 <div className="flex items-center justify-center h-full">
-                  <motion.div 
+                  <motion.div
                     animate={{ rotate: 360 }}
                     transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                     className="w-8 h-8 border-2 border-t-transparent rounded-full"
@@ -1262,7 +1891,7 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
                 <div className="flex flex-col items-center justify-center h-full opacity-30 text-center px-12">
                   <MessageSquare className="w-12 h-12 mb-4" />
                   <p className="text-sm font-bold">No hay mensajes previos</p>
-                  <p className="text-xs">Inicia una conversación segura con {selectedUser.username}</p>
+                  <p className="text-xs">Inicia una conversaciÃ³n segura con {selectedUser.username}</p>
                 </div>
               ) : (
                 messages.map((msg) => (
@@ -1273,10 +1902,10 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
                     className={`flex ${msg.sender_id === userProfile.id ? 'justify-end' : 'justify-start'}`}
                   >
                     <div className={`max-w-[80%] p-4 rounded-3xl text-sm shadow-sm ${
-                      msg.sender_id === userProfile.id 
-                        ? 'bg-emerald-600 text-white rounded-tr-none' 
+                      msg.sender_id === userProfile.id
+                        ? 'bg-emerald-600 text-white rounded-tr-none'
                         : 'bg-black/5 rounded-tl-none border'
-                    }`} style={{ 
+                    }`} style={{
                       borderColor: msg.sender_id === userProfile.id ? 'transparent' : 'var(--border-color)',
                       color: msg.sender_id === userProfile.id ? '#fff' : 'var(--text-color)'
                     }}>
@@ -1333,16 +1962,16 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
             <div className="w-24 h-24 rounded-full bg-emerald-500/10 flex items-center justify-center mb-6">
               <Users className="w-12 h-12 text-emerald-500" />
             </div>
-            <h3 className="text-xl font-bold mb-2" style={{ color: 'var(--text-color)' }}>Mensajería Privada</h3>
-            <p className="text-sm max-w-xs" style={{ color: 'var(--text-color)' }}>Selecciona un contacto de la lista para iniciar una comunicación encriptada de punto a punto.</p>
+            <h3 className="text-xl font-bold mb-2" style={{ color: 'var(--text-color)' }}>MensajerÃ­a Privada</h3>
+            <p className="text-sm max-w-xs" style={{ color: 'var(--text-color)' }}>Selecciona un contacto de la lista para iniciar una comunicaciÃ³n encriptada de punto a punto.</p>
           </div>
         )}
         <AnimatePresence>
           {viewingProfile && (
-            <UserProfileModal 
-              user={viewingProfile} 
-              onClose={() => setViewingProfile(null)} 
-              isDarkMode={false} 
+            <UserProfileModal
+              user={viewingProfile}
+              onClose={() => setViewingProfile(null)}
+              isDarkMode={false}
             />
           )}
         </AnimatePresence>
@@ -1351,30 +1980,21 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
   );
 };
 
-const HASH_DATA: Record<string, AppHashData> = {
+const APP_PREVIEW_DATA: Record<string, AppPreviewData> = {
   putty: {
     name: 'putty.exe',
-    description: 'Un emulador de terminal, consola serie y aplicación de transferencia de archivos de red gratuito y de código abierto. Es la herramienta estándar para conexiones SSH en entornos Windows.',
+    description: 'Un emulador de terminal, consola serie y aplicaciÃ³n de transferencia de archivos de red gratuito y de cÃ³digo abierto. Es la herramienta estÃ¡ndar para conexiones SSH en entornos Windows.',
     image: 'https://images-eds-ssl.xboxlive.com/image?url=4rt9.lXDC4H_93laV1_eHHFT949fUipzkiFOBH3fAiZZUCdYojwUyX2aTonS1aIwMrx6NUIsHfUHSLzjGJFxxrDCrF4C8KvxYUkHBppqZebLObdfSSbqzWqRS3lDi.Ystyxw4_k2Pjh.pceYORwgAJzEZ0VJ3Hwwbhe5wvCwruY-&format=source&h=115',
-    md5: '36e31f610eef3223154e6e8fd074190f',
-    sha1: '1f2800382cd71163c10e5ce0a32b60297489fbb5',
-    sha256: '16cbe40fb24ce2d422afddb5a90a5801ced32ef52c22c2fc77b25a90837f28ad',
   },
   plink: {
     name: 'plink.exe',
-    description: 'Una interfaz de línea de comandos para los motores de PuTTY. Es una extensión vital para la automatización y el scripting, permitiendo ejecutar comandos remotos de forma segura desde la consola.',
+    description: 'Una interfaz de lÃ­nea de comandos para los motores de PuTTY. Es una extensiÃ³n vital para la automatizaciÃ³n y el scripting, permitiendo ejecutar comandos remotos de forma segura desde la consola.',
     image: 'https://images-eds-ssl.xboxlive.com/image?url=4rt9.lXDC4H_93laV1_eHHFT949fUipzkiFOBH3fAiZZUCdYojwUyX2aTonS1aIwMrx6NUIsHfUHSLzjGJFxxrDCrF4C8KvxYUkHBppqZebLObdfSSbqzWqRS3lDi.Ystyxw4_k2Pjh.pceYORwgAJzEZ0VJ3Hwwbhe5wvCwruY-&format=source&h=115',
-    md5: '269ce7b3a3fcdf735cd8a37c04abfdae',
-    sha1: '46ddfbbb5b4193279b9e024a5d013f5d825fcdf5',
-    sha256: '50479953865b30775056441b10fdcb984126ba4f98af4f64756902a807b453e7',
   },
   virtualbox: {
     name: 'VirtualBox-7.0.8-156879-Win.exe',
-    description: 'Un potente software de virtualización para arquitecturas x86 y AMD64/Intel64. Permite a empresas y usuarios domésticos ejecutar múltiples sistemas operativos invitados simultáneamente.',
+    description: 'Un potente software de virtualizaciÃ³n para arquitecturas x86 y AMD64/Intel64. Permite a empresas y usuarios domÃ©sticos ejecutar mÃºltiples sistemas operativos invitados simultÃ¡neamente.',
     image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/ff/VirtualBox_2024_Logo.svg/1280px-VirtualBox_2024_Logo.svg.png',
-    md5: '5277068968032af616e7e4cc86f1d3c2',
-    sha1: '6e3e2912d2131bb249f416088ee49088ab841580',
-    sha256: '8a2da26ca69c1ddfc50fb65ee4fa8f269e692302046df4e2f48948775ba6339a',
   },
 };
 
@@ -1390,6 +2010,9 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [currentThemeId, setCurrentThemeId] = useState('dark');
+  const [publicView, setPublicView] = useState<PublicView>('landing');
+  const [initialAuthMode, setInitialAuthMode] = useState<AuthMode>('login');
+  const [resetToken, setResetToken] = useState('');
   const [showAssignmentPopup, setShowAssignmentPopup] = useState(false);
   const [notificationPrefs, setNotificationPrefs] = useState<NotificationPrefs>({
     newActivity: true,
@@ -1408,6 +2031,12 @@ export default function App() {
 
     localStorage.removeItem('crypto_toolbox_quiz_passed');
     localStorage.removeItem('crypto_toolbox_entry_method');
+
+    const incomingResetToken = new URLSearchParams(window.location.search).get('reset_token');
+    if (incomingResetToken) {
+      setResetToken(incomingResetToken);
+      setPublicView('reset');
+    }
 
     if (assignmentPopupSeen !== 'true') {
       setShowAssignmentPopup(true);
@@ -1461,12 +2090,25 @@ export default function App() {
   const handleProfileComplete = (profile: UserProfile) => {
     localStorage.setItem('crypto_toolbox_profile', JSON.stringify(profile));
     setUserProfile(profile);
+    setPublicView('landing');
   };
 
   const handleLogout = () => {
     fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
     localStorage.removeItem('crypto_toolbox_profile');
     setUserProfile(null);
+    setPublicView('landing');
+  };
+
+  const openAuth = (mode: AuthMode) => {
+    setInitialAuthMode(mode);
+    setPublicView('auth');
+  };
+
+  const backToLoginFromReset = () => {
+    window.history.replaceState({}, '', window.location.pathname);
+    setResetToken('');
+    openAuth('login');
   };
 
   const handleThemeChange = (themeId: string) => {
@@ -1491,15 +2133,34 @@ export default function App() {
     <div className={isDarkMode ? 'dark' : ''} style={{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', minHeight: '100vh' }}>
       <Toaster position="top-right" theme={isDarkMode ? 'dark' : 'light'} />
       <AssignmentBriefPopup
-        isOpen={showAssignmentPopup}
+        isOpen={showAssignmentPopup && Boolean(userProfile)}
         onClose={handleCloseAssignmentPopup}
         isDarkMode={isDarkMode}
       />
       {!userProfile ? (
-        <ProfileSelector 
-          onSelect={handleProfileComplete} 
-          isDarkMode={isDarkMode}
-        />
+        publicView === 'terms' ? (
+          <TermsPage
+            onBack={() => setPublicView('landing')}
+            onOpenAuth={openAuth}
+          />
+        ) : publicView === 'auth' ? (
+          <AuthPortal
+            onSelect={handleProfileComplete}
+            onBackToHome={() => setPublicView('landing')}
+            onShowTerms={() => setPublicView('terms')}
+            initialMode={initialAuthMode}
+          />
+        ) : publicView === 'reset' && resetToken ? (
+          <ResetPinPage
+            token={resetToken}
+            onBackToLogin={backToLoginFromReset}
+          />
+        ) : (
+          <PublicLanding
+            onOpenAuth={openAuth}
+            onShowTerms={() => setPublicView('terms')}
+          />
+        )
       ) : (
         <MainApp
           isDarkMode={isDarkMode}
@@ -1525,108 +2186,108 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
   const rounds = useMemo(() => {
     const data = CryptoJS.enc.Utf8.parse(input);
     const steps = [];
-    
+
     if (hashType === 'sha256') {
-      steps.push({ 
-        title: 'Padding Inicial', 
-        desc: 'El mensaje se rellena con un bit "1", seguido de ceros, y la longitud del mensaje original en 64 bits para que sea múltiplo de 512 bits.', 
+      steps.push({
+        title: 'Padding Inicial',
+        desc: 'El mensaje se rellena con un bit "1", seguido de ceros, y la longitud del mensaje original en 64 bits para que sea mÃºltiplo de 512 bits.',
         data: CryptoJS.enc.Hex.stringify(data) + '8000...',
         logic: 'Append 1 bit, then k zeros such that (L + 1 + k) % 512 = 448, then 64-bit length.'
       });
-      steps.push({ 
-        title: 'Valores Iniciales (H)', 
-        desc: 'Se inicializan 8 registros (A-H) con los primeros 32 bits de las partes fraccionarias de las raíces cuadradas de los primeros 8 números primos.', 
+      steps.push({
+        title: 'Valores Iniciales (H)',
+        desc: 'Se inicializan 8 registros (A-H) con los primeros 32 bits de las partes fraccionarias de las raÃ­ces cuadradas de los primeros 8 nÃºmeros primos.',
         data: 'H0=6a09e667, H1=bb67ae85, H2=3c6ef372, H3=a54ff53a, H4=510e527f, H5=9b05688c, H6=1f83d9ab, H7=5be0cd19',
         logic: 'Primes: 2, 3, 5, 7, 11, 13, 17, 19. Registers: A, B, C, D, E, F, G, H.'
       });
-      steps.push({ 
-        title: 'Message Schedule (W)', 
-        desc: 'Se expanden los 512 bits del bloque en 64 palabras de 32 bits (W0-W63) usando funciones de rotación y desplazamiento.', 
+      steps.push({
+        title: 'Message Schedule (W)',
+        desc: 'Se expanden los 512 bits del bloque en 64 palabras de 32 bits (W0-W63) usando funciones de rotaciÃ³n y desplazamiento.',
         data: 'W[0...63] expansion: ' + CryptoJS.SHA256(input).toString().substring(0, 16) + '...',
-        logic: 'W[t] = σ1(W[t-2]) + W[t-7] + σ0(W[t-15]) + W[t-16] for t=16 to 63.'
+        logic: 'W[t] = Ïƒ1(W[t-2]) + W[t-7] + Ïƒ0(W[t-15]) + W[t-16] for t=16 to 63.'
       });
       for(let i=1; i<=4; i++) {
-        steps.push({ 
-          title: `Ronda de Compresión ${i}`, 
-          desc: `Se aplican funciones lógicas (Ch, Maj, Σ0, Σ1) y constantes K[t] a los registros A-H en un ciclo de 64 iteraciones.`, 
+        steps.push({
+          title: `Ronda de CompresiÃ³n ${i}`,
+          desc: `Se aplican funciones lÃ³gicas (Ch, Maj, Î£0, Î£1) y constantes K[t] a los registros A-H en un ciclo de 64 iteraciones.`,
           data: CryptoJS.SHA256(input + i).toString().substring(0, 32) + '...',
-          logic: `T1 = h + Σ1(e) + Ch(e,f,g) + K[t] + W[t]; T2 = Σ0(a) + Maj(a,b,c); h=g; g=f; f=e; e=d+T1; d=c; c=b; b=a; a=T1+T2.`
+          logic: `T1 = h + Î£1(e) + Ch(e,f,g) + K[t] + W[t]; T2 = Î£0(a) + Maj(a,b,c); h=g; g=f; f=e; e=d+T1; d=c; c=b; b=a; a=T1+T2.`
         });
       }
-      steps.push({ 
-        title: 'Suma Final', 
-        desc: 'Los valores de los registros después de 64 rondas se suman a los valores H iniciales para obtener el hash del bloque.', 
+      steps.push({
+        title: 'Suma Final',
+        desc: 'Los valores de los registros despuÃ©s de 64 rondas se suman a los valores H iniciales para obtener el hash del bloque.',
         data: 'H0 = H0 + a, H1 = H1 + b, ..., H7 = H7 + h',
         logic: 'Final state addition ensures the compression function is one-way.'
       });
-      steps.push({ 
-        title: 'Digest SHA-256', 
-        desc: 'Los registros finales se concatenan para formar la firma digital de 256 bits (64 caracteres hexadecimales).', 
+      steps.push({
+        title: 'Digest SHA-256',
+        desc: 'Los registros finales se concatenan para formar la firma digital de 256 bits (64 caracteres hexadecimales).',
         data: CryptoJS.SHA256(input).toString(),
         logic: 'Concatenate H0 || H1 || H2 || H3 || H4 || H5 || H6 || H7.'
       });
     } else if (hashType === 'sha1') {
-      steps.push({ 
-        title: 'Pre-procesamiento', 
-        desc: 'Se añade un bit "1" seguido de ceros y la longitud del mensaje en 64 bits para completar un bloque de 512 bits.', 
+      steps.push({
+        title: 'Pre-procesamiento',
+        desc: 'Se aÃ±ade un bit "1" seguido de ceros y la longitud del mensaje en 64 bits para completar un bloque de 512 bits.',
         data: CryptoJS.enc.Hex.stringify(data) + '8000...',
         logic: 'Similar to SHA-2, but uses 160-bit state (5 registers).'
       });
-      steps.push({ 
-        title: 'Registros A-E', 
-        desc: 'Se inicializan 5 variables de 32 bits con valores constantes específicos del estándar SHA-1.', 
+      steps.push({
+        title: 'Registros A-E',
+        desc: 'Se inicializan 5 variables de 32 bits con valores constantes especÃ­ficos del estÃ¡ndar SHA-1.',
         data: 'A=67452301, B=efcdab89, C=98badcfe, D=10325476, E=c3d2e1f0',
         logic: 'Initial state: H0, H1, H2, H3, H4.'
       });
       for(let i=1; i<=4; i++) {
-        steps.push({ 
-          title: `Ronda Principal ${i}`, 
-          desc: `Se realizan 80 iteraciones divididas en 4 etapas, usando funciones no lineales y rotaciones circulares sobre los registros.`, 
+        steps.push({
+          title: `Ronda Principal ${i}`,
+          desc: `Se realizan 80 iteraciones divididas en 4 etapas, usando funciones no lineales y rotaciones circulares sobre los registros.`,
           data: CryptoJS.SHA1(input + i).toString().substring(0, 32) + '...',
           logic: 'TEMP = (A <<< 5) + f(B,C,D) + E + W[t] + K[t]; E=D; D=C; C=(B <<< 30); B=A; A=TEMP.'
         });
       }
-      steps.push({ 
-        title: 'Acumulación', 
-        desc: 'Los resultados de las 80 rondas se añaden a los valores iniciales de los registros A, B, C, D y E.', 
+      steps.push({
+        title: 'AcumulaciÃ³n',
+        desc: 'Los resultados de las 80 rondas se aÃ±aden a los valores iniciales de los registros A, B, C, D y E.',
         data: 'H0=H0+A, H1=H1+B, H2=H2+C, H3=H3+D, H4=H4+E',
         logic: 'Modulo 2^32 addition of the final state to the initial state.'
       });
-      steps.push({ 
-        title: 'Hash Final SHA-1', 
-        desc: 'La concatenación de los 5 registros produce el digest final de 160 bits (40 caracteres hexadecimales).', 
+      steps.push({
+        title: 'Hash Final SHA-1',
+        desc: 'La concatenaciÃ³n de los 5 registros produce el digest final de 160 bits (40 caracteres hexadecimales).',
         data: CryptoJS.SHA1(input).toString(),
         logic: 'Concatenate H0 || H1 || H2 || H3 || H4.'
       });
     } else {
-      steps.push({ 
-        title: 'Inicialización MD5', 
-        desc: 'Se preparan los 4 registros de encadenamiento de 32 bits (A, B, C, D) con valores Little-Endian.', 
+      steps.push({
+        title: 'InicializaciÃ³n MD5',
+        desc: 'Se preparan los 4 registros de encadenamiento de 32 bits (A, B, C, D) con valores Little-Endian.',
         data: 'A=01234567, B=89abcdef, C=fedcba98, D=76543210',
         logic: 'Registers: A, B, C, D. Constants derived from sine function.'
       });
-      steps.push({ 
-        title: 'Funciones Auxiliares', 
-        desc: 'Se definen 4 funciones no lineales (F, G, H, I) que operan sobre los bits de los registros.', 
+      steps.push({
+        title: 'Funciones Auxiliares',
+        desc: 'Se definen 4 funciones no lineales (F, G, H, I) que operan sobre los bits de los registros.',
         data: 'F(X,Y,Z) = (X & Y) | (~X & Z); G(X,Y,Z) = (X & Z) | (Y & ~Z)...',
         logic: 'F, G, H, I are used in each of the 64 steps of the compression function.'
       });
       for(let i=1; i<=4; i++) {
-        steps.push({ 
-          title: `Operación de Ronda ${i}`, 
-          desc: `Se procesa el bloque de 512 bits en 64 pasos, aplicando rotaciones y sumas modulares con constantes T[i].`, 
+        steps.push({
+          title: `OperaciÃ³n de Ronda ${i}`,
+          desc: `Se procesa el bloque de 512 bits en 64 pasos, aplicando rotaciones y sumas modulares con constantes T[i].`,
           data: CryptoJS.MD5(input + i).toString(),
           logic: 'A = B + ((A + F(B,C,D) + X[k] + T[i]) <<< s)'
         });
       }
-      steps.push({ 
-        title: 'Digest Final MD5', 
-        desc: 'El resultado final es un valor de 128 bits, comúnmente usado para verificar la integridad de archivos.', 
+      steps.push({
+        title: 'Digest Final MD5',
+        desc: 'El resultado final es un valor de 128 bits, comÃºnmente usado para verificar la integridad de archivos.',
         data: CryptoJS.MD5(input).toString(),
         logic: 'Concatenate A || B || C || D in Little-Endian format.'
       });
     }
-    
+
     return steps;
   }, [input, hashType]);
 
@@ -1654,8 +2315,8 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
             <Cpu className="w-6 h-6" style={{ color: colors[hashType] }} />
           </div>
           <div>
-            <h2 className="text-2xl font-bold tracking-tight">Visualizador Criptográfico</h2>
-            <p className="text-xs opacity-50 uppercase tracking-widest font-bold">Análisis de Rondas en Tiempo Real</p>
+            <h2 className="text-2xl font-bold tracking-tight">Visualizador CriptogrÃ¡fico</h2>
+            <p className="text-xs opacity-50 uppercase tracking-widest font-bold">AnÃ¡lisis de Rondas en Tiempo Real</p>
           </div>
         </div>
 
@@ -1665,7 +2326,7 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
               key={type}
               onClick={() => { setHashType(type); setStep(0); }}
               className={`px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all ${hashType === type ? 'bg-white shadow-sm' : 'opacity-40 hover:opacity-100'}`}
-              style={{ 
+              style={{
                 backgroundColor: hashType === type ? (isDarkMode ? '#222' : '#fff') : 'transparent',
                 color: hashType === type ? colors[type] : 'var(--text-color)'
               }}
@@ -1679,10 +2340,10 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
       {/* Step Progress Bar */}
       <div className="mb-8 flex gap-1 h-1.5 w-full bg-black/5 rounded-full overflow-hidden border border-white/5">
         {rounds.map((_, i) => (
-          <div 
+          <div
             key={i}
             className="flex-1 transition-all duration-500"
-            style={{ 
+            style={{
               backgroundColor: i <= step ? colors[hashType] : 'transparent',
               opacity: i <= step ? 1 : 0.1
             }}
@@ -1694,9 +2355,9 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
         <div className="relative">
           <label className="block text-[10px] font-bold uppercase tracking-widest mb-2 opacity-40">Texto de Entrada</label>
           <div className="relative">
-            <input 
-              type="text" 
-              value={input} 
+            <input
+              type="text"
+              value={input}
               onChange={(e) => { setInput(e.target.value); setStep(0); }}
               className="w-full p-5 rounded-2xl border bg-black/5 font-mono text-sm outline-none transition-all pr-12"
               style={{ borderColor: 'var(--border-color)', color: 'var(--text-color)', focusRingColor: `${colors[hashType]}20` }}
@@ -1714,18 +2375,18 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
               <span className="text-[10px] font-mono opacity-40">{step + 1} / {rounds.length}</span>
             </div>
             {rounds.map((r, i) => (
-              <motion.div 
+              <motion.div
                 key={i}
                 whileHover={{ x: 4 }}
                 className={`p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden ${step === i ? 'shadow-lg' : 'opacity-40 grayscale hover:opacity-60 hover:grayscale-0'}`}
-                style={{ 
+                style={{
                   borderColor: step === i ? colors[hashType] : 'var(--border-color)',
                   backgroundColor: step === i ? `${colors[hashType]}05` : 'transparent'
                 }}
                 onClick={() => setStep(i)}
               >
                 {step === i && (
-                  <motion.div 
+                  <motion.div
                     layoutId="active-indicator"
                     className="absolute left-0 top-0 bottom-0 w-1"
                     style={{ backgroundColor: colors[hashType] }}
@@ -1746,7 +2407,7 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
               <div className="absolute inset-0 opacity-[0.03] pointer-events-none">
                 <div className="w-full h-full" style={{ backgroundImage: 'radial-gradient(circle, var(--text-color) 1px, transparent 1px)', backgroundSize: '30px 30px' }} />
               </div>
-              
+
               <AnimatePresence mode="wait">
                 <motion.div
                   key={`${hashType}-${step}`}
@@ -1760,7 +2421,7 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
                   </div>
                   <h3 className="text-2xl font-bold mb-3 tracking-tight">{rounds[step].title}</h3>
                   <p className="text-sm opacity-60 mb-6 leading-relaxed max-w-[350px] mx-auto">{rounds[step].desc}</p>
-                  
+
                   <div className="space-y-4">
                     <div className="relative group">
                       <div className="absolute -inset-1 bg-gradient-to-r opacity-20 blur group-hover:opacity-30 transition duration-1000 group-hover:duration-200" style={{ backgroundImage: `linear-gradient(to right, ${colors[hashType]}, transparent)` }} />
@@ -1774,14 +2435,14 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
                     </div>
 
                     {rounds[step].logic && (
-                      <motion.div 
+                      <motion.div
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         className="p-4 rounded-xl bg-white/5 border border-white/10 text-left"
                       >
                         <div className="flex items-center gap-2 mb-2 opacity-40">
                           <Code className="w-3 h-3" />
-                          <span className="text-[8px] uppercase font-bold tracking-widest">Lógica Interna</span>
+                          <span className="text-[8px] uppercase font-bold tracking-widest">LÃ³gica Interna</span>
                         </div>
                         <p className="text-[10px] font-mono opacity-80 leading-relaxed">{rounds[step].logic}</p>
                       </motion.div>
@@ -1791,17 +2452,17 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
               </AnimatePresence>
 
               <div className="mt-12 flex items-center gap-4">
-                <button 
+                <button
                   onClick={() => setStep(s => (s - 1 + rounds.length) % rounds.length)}
                   className="p-3 rounded-xl border hover:bg-black/5 transition-all"
                   style={{ borderColor: 'var(--border-color)' }}
                 >
                   <ChevronRight className="w-5 h-5 rotate-180" />
                 </button>
-                <button 
+                <button
                   onClick={() => setIsAutoPlaying(!isAutoPlaying)}
                   className="px-8 py-3 rounded-2xl font-bold text-sm shadow-xl transition-all active:scale-95 flex items-center gap-3"
-                  style={{ 
+                  style={{
                     backgroundColor: isAutoPlaying ? '#ef4444' : colors[hashType],
                     color: isAutoPlaying ? '#fff' : '#000',
                     boxShadow: `0 10px 20px -5px ${isAutoPlaying ? 'rgba(239, 68, 68, 0.3)' : `${colors[hashType]}40`}`
@@ -1810,7 +2471,7 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
                   {isAutoPlaying ? <X className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                   {isAutoPlaying ? 'Detener' : 'Auto-Play'}
                 </button>
-                <button 
+                <button
                   onClick={() => setStep(s => (s + 1) % rounds.length)}
                   className="p-3 rounded-xl border hover:bg-black/5 transition-all"
                   style={{ borderColor: 'var(--border-color)' }}
@@ -1838,7 +2499,7 @@ const ReputationSystem = ({ userProfile, isDarkMode }: { userProfile: UserProfil
       <div className="flex flex-col md:flex-row items-center gap-8 mb-12">
         <div className="relative">
           <div className="w-32 h-32 rounded-[2.5rem] overflow-hidden border-4 border-emerald-500/20 shadow-xl">
-            <img 
+            <img
               src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${userProfile.avatar_seed}`}
               alt={userProfile.username}
               className="w-full h-full object-cover"
@@ -1859,7 +2520,7 @@ const ReputationSystem = ({ userProfile, isDarkMode }: { userProfile: UserProfil
             </span>
             <span className="px-3 py-1 rounded-full bg-blue-500/10 text-blue-500 text-xs font-bold border border-blue-500/20 flex items-center gap-2">
               <Zap className="w-3 h-3" />
-              {userProfile.points || 0} Puntos de Reputación
+              {userProfile.points || 0} Puntos de ReputaciÃ³n
             </span>
             <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-500 text-xs font-bold border border-amber-500/20 flex items-center gap-2">
               <Star className="w-3 h-3" />
@@ -1874,12 +2535,12 @@ const ReputationSystem = ({ userProfile, isDarkMode }: { userProfile: UserProfil
           <div className="flex justify-between items-end mb-4">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-1">Progreso de Nivel</p>
-              <h3 className="font-bold text-sm sm:text-base truncate max-w-[180px] sm:max-w-none">Siguiente Rango: {nextRank ? nextRank.name : (isAdmin ? 'Admin Máximo' : 'Nivel Máximo')}</h3>
+              <h3 className="font-bold text-sm sm:text-base truncate max-w-[180px] sm:max-w-none">Siguiente Rango: {nextRank ? nextRank.name : (isAdmin ? 'Admin MÃ¡ximo' : 'Nivel MÃ¡ximo')}</h3>
             </div>
-            <span className="text-xs font-mono font-bold">{userProfile.points || 0} / {nextRank ? nextRank.min : (isAdmin ? '∞' : '∞')}</span>
+            <span className="text-xs font-mono font-bold">{userProfile.points || 0} / {nextRank ? nextRank.min : (isAdmin ? 'âˆž' : 'âˆž')}</span>
           </div>
           <div className="h-4 w-full bg-black/10 rounded-full overflow-hidden border border-white/5 p-1">
-            <motion.div 
+            <motion.div
               initial={{ width: 0 }}
               animate={{ width: `${progress}%` }}
               className="h-full bg-gradient-to-r from-emerald-500 to-blue-500 rounded-full shadow-lg"
@@ -1889,7 +2550,7 @@ const ReputationSystem = ({ userProfile, isDarkMode }: { userProfile: UserProfil
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
           {RANKS.map((r, i) => (
-            <div 
+            <div
               key={r.name}
               className={`p-6 rounded-3xl border transition-all flex flex-col items-center text-center gap-3 ${i <= currentRankIndex ? 'bg-emerald-500/5 border-emerald-500/20' : 'opacity-30 grayscale'}`}
               style={{ borderColor: i <= currentRankIndex ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-color)' }}
@@ -1913,7 +2574,7 @@ const ReputationSystem = ({ userProfile, isDarkMode }: { userProfile: UserProfil
             <Award className="w-8 h-8 text-blue-500" />
           </div>
           <div className="flex-1 text-center md:text-left">
-            <h4 className="font-bold mb-1">¿Cómo ganar reputación?</h4>
+            <h4 className="font-bold mb-1">Â¿CÃ³mo ganar reputaciÃ³n?</h4>
             <p className="text-xs opacity-60 leading-relaxed">Genera nuevos hashes (+1 pt), decodifica hashes exitosamente (+5 pts) y participa en la comunidad para subir de rango y desbloquear privilegios.</p>
           </div>
         </div>
@@ -1948,22 +2609,22 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       });
       if (response.ok) {
         const data = await response.json();
-        const updatedProfile = { 
-          ...userProfile, 
-          points: data.points, 
+        const updatedProfile = {
+          ...userProfile,
+          points: data.points,
           rank: data.rank,
-          level: data.level 
+          level: data.level
         };
         onProfileUpdate(updatedProfile);
         localStorage.setItem('crypto_toolbox_profile', JSON.stringify(updatedProfile));
-        
+
         if (data.rank !== userProfile.rank) {
-          toast.success(`¡Nuevo Rango Alcanzado: ${data.rank}!`, {
+          toast.success(`Â¡Nuevo Rango Alcanzado: ${data.rank}!`, {
             icon: <Award className="w-5 h-5 text-yellow-500" />
           });
         }
       } else if (response.status === 404 || response.status === 401) {
-        toast.error('Tu sesión ha expirado o tu usuario ha sido eliminado');
+        toast.error('Tu sesiÃ³n ha expirado o tu usuario ha sido eliminado');
         onLogout();
       }
     } catch (error) {
@@ -2026,11 +2687,6 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       initialCache[CryptoJS.SHA1(pwd).toString()] = pwd;
       initialCache[CryptoJS.SHA256(pwd).toString()] = pwd;
     });
-    Object.values(HASH_DATA).forEach(app => {
-      initialCache[app.md5.toLowerCase()] = `${app.name} (MD5)`;
-      initialCache[app.sha1.toLowerCase()] = `${app.name} (SHA1)`;
-      initialCache[app.sha256.toLowerCase()] = `${app.name} (SHA256)`;
-    });
     return initialCache;
   });
 
@@ -2040,7 +2696,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       // Clean up the value to group properly (e.g., remove " (MD5)" suffix if present)
       const cleanValue = (value as string).replace(/ \((MD5|SHA1|SHA256)\)$/i, '');
       if (!groups[cleanValue]) groups[cleanValue] = {};
-      
+
       if (hash.length === 32) groups[cleanValue].md5 = hash;
       else if (hash.length === 40) groups[cleanValue].sha1 = hash;
       else if (hash.length === 64) groups[cleanValue].sha256 = hash;
@@ -2069,7 +2725,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
 
     // Filter by user
     if (activityFilterUser) {
-      result = result.filter(a => 
+      result = result.filter(a =>
         a.user_name?.toLowerCase().includes(activityFilterUser.toLowerCase())
       );
     }
@@ -2083,8 +2739,8 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       } else {
         const nameA = (a.user_name || '').toLowerCase();
         const nameB = (b.user_name || '').toLowerCase();
-        return activitySortOrder === 'asc' 
-          ? nameA.localeCompare(nameB) 
+        return activitySortOrder === 'asc'
+          ? nameA.localeCompare(nameB)
           : nameB.localeCompare(nameA);
       }
     });
@@ -2105,7 +2761,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
 
     if (file.size > 500 * 1024 * 1024) {
       toast.error("Archivo demasiado grande", {
-        description: "El límite máximo es de 500MB."
+        description: "El lÃ­mite mÃ¡ximo es de 500MB."
       });
       return;
     }
@@ -2118,12 +2774,12 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
     try {
       const startTime = Date.now();
       setDbStatus('idle');
-      
+
       const chunkSize = 2 * 1024 * 1024; // 2MB chunks
       const md5 = CryptoJS.algo.MD5.create();
       const sha1 = CryptoJS.algo.SHA1.create();
       const sha256 = CryptoJS.algo.SHA256.create();
-      
+
       let offset = 0;
       const reader = new FileReader();
 
@@ -2135,7 +2791,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
               md5.update(wordArray);
               sha1.update(wordArray);
               sha256.update(wordArray);
-              
+
               offset += event.target.result.byteLength;
               const progress = Math.min(100, Math.round((offset / file.size) * 100));
               setHashingProgress(progress);
@@ -2157,18 +2813,18 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       const md5Hash = md5.finalize().toString();
       const sha1Hash = sha1.finalize().toString();
       const sha256Hash = sha256.finalize().toString();
-      
+
       setFileHashes({ md5: md5Hash, sha1: sha1Hash, sha256: sha256Hash });
-      
+
       // Update shared cache and global activity
       updateSharedCache({ md5: md5Hash, sha1: sha1Hash, sha256: sha256Hash }, file.name, 'file');
-      
-      toast.success("Análisis completado con éxito", {
+
+      toast.success("AnÃ¡lisis completado con Ã©xito", {
         description: `Se han generado 3 firmas digitales en ${((Date.now() - startTime) / 1000).toFixed(2)}s`
       });
     } catch (error) {
       console.error("Error hashing file:", error);
-      toast.error("Fallo en el análisis de integridad", {
+      toast.error("Fallo en el anÃ¡lisis de integridad", {
         description: "Hubo un problema al procesar los datos del archivo."
       });
     } finally {
@@ -2294,7 +2950,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
         const md5 = CryptoJS.MD5(value).toString().toLowerCase();
         const sha1 = CryptoJS.SHA1(value).toString().toLowerCase();
         const sha256 = CryptoJS.SHA256(value).toString().toLowerCase();
-        
+
         setHashCache(prev => {
           const next = { ...prev };
           delete next[md5];
@@ -2325,17 +2981,17 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
 
   useEffect(() => {
     const newSocket = io({ transports: ['websocket'], withCredentials: true });
-    
+
     // Authenticate socket connection
     if (userProfile?.username) {
       newSocket.emit('user_online', userProfile);
     }
-    
+
     setSocket(newSocket);
 
     newSocket.on('connect_error', (error) => {
       console.error('Socket connection error:', error);
-      toast.error('Error de conexión con el servidor de chat');
+      toast.error('Error de conexiÃ³n con el servidor de chat');
     });
 
     newSocket.on('update_online_users', (users: any[]) => {
@@ -2350,17 +3006,17 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
         if (prev.find(a => a.id === activity.id)) return prev;
         return [activity, ...prev].slice(0, 50);
       });
-      
+
       // Notification for new global activity
       if (notificationPrefs.newActivity && activity.user_name !== userProfile.username) {
         toast.info(`Nueva actividad de ${activity.user_name}`, {
-          description: `${activity.type === 'generate' ? 'Generó' : activity.type === 'decode' ? 'Decodificó' : activity.type === 'file' ? 'Analizó' : 'Verificó'} un hash`,
+          description: `${activity.type === 'generate' ? 'GenerÃ³' : activity.type === 'decode' ? 'DecodificÃ³' : activity.type === 'file' ? 'AnalizÃ³' : 'VerificÃ³'} un hash`,
           icon: activity.type === 'file' ? (
             <File className="w-6 h-6 text-amber-500" />
-          ) : activity.user_avatar && activity.user_avatar !== '👤' ? (
+          ) : activity.user_avatar && activity.user_avatar !== 'ðŸ‘¤' ? (
             <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${activity.user_avatar}`} className="w-6 h-6 rounded-full" />
           ) : (
-            <span className="text-xl">👤</span>
+            <span className="text-xl">ðŸ‘¤</span>
           )
         });
       }
@@ -2385,7 +3041,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
     });
 
     newSocket.on('force_logout', () => {
-      toast.error('Tu sesión ha expirado o tu cuenta ya no existe');
+      toast.error('Tu sesiÃ³n ha expirado o tu cuenta ya no existe');
       onLogout();
     });
 
@@ -2395,12 +3051,12 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       setRecentCached([]);
       setOnlineUsers([userProfile]); // Mantener solo al usuario actual
       toast.info('La base de datos ha sido reiniciada por un administrador');
-      
+
       // Si el usuario no es admin, su cuenta fue eliminada
       if (userProfile.role !== 'admin') {
         setTimeout(() => {
           onLogout();
-          toast.error('Tu sesión ha expirado porque la base de datos fue reiniciada');
+          toast.error('Tu sesiÃ³n ha expirado porque la base de datos fue reiniciada');
         }, 3000);
       }
     });
@@ -2425,8 +3081,8 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       const response = await fetch('/api/hashes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          hashes, 
+        body: JSON.stringify({
+          hashes,
           value,
           type,
           userName: userProfile.username,
@@ -2456,7 +3112,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
     if (textToHash) {
       const { md5, sha1, sha256 } = generatedHashes;
       const isAlreadyCached = hashCache[md5] && hashCache[sha1] && hashCache[sha256];
-      
+
       if (!isAlreadyCached) {
         updateSharedCache({ md5, sha1, sha256 }, textToHash, 'generate');
         setHashCache(prev => ({
@@ -2484,7 +3140,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
     if (!isValidLength) {
       setDecodeResult({
         found: false,
-        error: `Longitud de hash inválida (${targetHash.length}). Debe ser 32 (MD5), 40 (SHA1) o 64 (SHA256).`,
+        error: `Longitud de hash invÃ¡lida (${targetHash.length}). Debe ser 32 (MD5), 40 (SHA1) o 64 (SHA256).`,
         time: 0
       });
       return;
@@ -2507,16 +3163,22 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
     }
 
     try {
-      console.log(`[DECODE] Iniciando búsqueda online para hash: ${targetHash}`);
-      
+
       // 1. Intentar con el servicio gratuito del servidor
       const freeResponse = await fetch(`/api/decode/online/${targetHash}`);
+      if (!freeResponse.ok) {
+        if (freeResponse.status === 401) {
+          toast.error('Tu sesion expiro. Vuelve a iniciar sesion.');
+          onLogout();
+          return;
+        }
+        throw new Error('Decoder request failed');
+      }
       const freeData = await freeResponse.json();
 
       if (freeData.found) {
         const text = freeData.value;
-        console.log(`[DECODE] Encontrado en ${freeData.source}: ${text}`);
-        
+
         setDecodeResult({
           found: true,
           value: text,
@@ -2525,8 +3187,8 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
         });
 
         if (notificationPrefs.rareHash) {
-          toast.success('¡Hash decodificado con éxito!', {
-            description: `Valor encontrado: ${text} (vía ${freeData.source})`
+          toast.success('Â¡Hash decodificado con Ã©xito!', {
+            description: `Valor encontrado: ${text} (vÃ­a ${freeData.source})`
           });
         }
 
@@ -2537,57 +3199,17 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
         return;
       }
 
-      // 2. Intentar con Gemini SOLO si hay API KEY configurada
-      if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY") {
-        console.log("[DECODE] No encontrado en bases gratuitas, intentando con Gemini...");
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: `Analiza el siguiente hash: ${targetHash}. 
-Busca en internet (CrackStation, MD5Decrypt, bases de datos de filtraciones, etc.) para encontrar su valor original en texto plano.
-Si encuentras el valor, responde ÚNICAMENTE con el texto original decodificado, sin explicaciones ni formato adicional.
-Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND`,
-          config: {
-            tools: [{ googleSearch: {} }],
-            temperature: 0.1,
-          },
-        });
-
-        const text = response.text?.trim();
-        if (text && text !== "NOT_FOUND" && !text.toLowerCase().includes("not found") && text.length < 100) {
-          setDecodeResult({
-            found: true,
-            value: text,
-            method: 'online-ai',
-            time: Date.now() - startTime
-          });
-
-          if (notificationPrefs.rareHash) {
-            toast.success('¡Hash decodificado con éxito!', {
-              description: `Valor encontrado: ${text} (vía IA)`
-            });
-          }
-
-          updateSharedCache({ default: targetHash }, text, 'decode');
-          setHashCache(prev => ({ ...prev, [targetHash]: text }));
-          awardPoints(25);
-          setIsDecoding(false);
-          return;
-        }
-      }
-
       setDecodeResult({
         found: false,
-        error: "No se encontró el valor del hash en las bases de datos online gratuitas.",
+        error: "No se encontrÃ³ el valor del hash en las bases de datos online gratuitas.",
         time: Date.now() - startTime
       });
-      toast.error('No se encontró el valor del hash en las bases de datos online.');
+      toast.error('No se encontrÃ³ el valor del hash en las bases de datos online.');
     } catch (error) {
       console.error("Decoding search failed:", error);
       setDecodeResult({
         found: false,
-        error: "Error al realizar la búsqueda en línea.",
+        error: "Error al realizar la bÃºsqueda en lÃ­nea.",
         time: Date.now() - startTime
       });
     } finally {
@@ -2604,8 +3226,8 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
           <button
             onClick={() => setShowProfileMenu(!showProfileMenu)}
             className={`flex items-center gap-3 px-4 py-2 rounded-2xl shadow-lg transition-all border group ${
-              isDarkMode 
-                ? 'bg-black/40 border-white/10 text-white hover:bg-black/60 backdrop-blur-md' 
+              isDarkMode
+                ? 'bg-black/40 border-white/10 text-white hover:bg-black/60 backdrop-blur-md'
                 : 'bg-white border-black/5 text-[#1a1a1a] hover:bg-gray-50'
             }`}
           >
@@ -2625,9 +3247,9 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
           <AnimatePresence>
             {showProfileMenu && (
               <>
-                <div 
-                  className="fixed inset-0 z-[-1]" 
-                  onClick={() => setShowProfileMenu(false)} 
+                <div
+                  className="fixed inset-0 z-[-1]"
+                  onClick={() => setShowProfileMenu(false)}
                 />
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -2651,28 +3273,26 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                         onClick={() => {
                           setShowProfileMenu(false);
                           setConfirmAction({
-                            title: '¿Limpiar Base de Datos?',
-                            description: 'Esta acción eliminará todos los hashes, usuarios, chats e historial de actividad. No se puede deshacer.',
+                            title: 'Â¿Limpiar Base de Datos?',
+                            description: 'Esta acciÃ³n eliminarÃ¡ todos los hashes, usuarios, chats e historial de actividad. No se puede deshacer.',
                             onConfirm: async () => {
-                              console.log("[ADMIN] Iniciando petición de limpieza de base de datos...");
                               try {
                                 const res = await fetch('/api/admin/hashes', {
                                   method: 'DELETE'
                                 });
                                 if (res.ok) {
-                                  console.log("[ADMIN] Petición de limpieza exitosa");
                                   toast.success('Base de datos limpiada');
                                   setHashCache({});
                                   setActivities([]);
                                   setRecentCached([]);
                                 } else {
                                   const errorData = await res.json();
-                                  console.error("[ADMIN] Error en la petición de limpieza:", errorData);
+                                  console.error("[ADMIN] Error en la peticiÃ³n de limpieza:", errorData);
                                   toast.error(`Error: ${errorData.error || 'No se pudo limpiar'}`);
                                 }
                               } catch (error) {
                                 console.error("[ADMIN] Error de red al limpiar base de datos:", error);
-                                toast.error('Error de conexión');
+                                toast.error('Error de conexiÃ³n');
                               }
                             }
                           });
@@ -2695,7 +3315,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                       <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                         <LogOut className="w-4 h-4" />
                       </div>
-                      Cerrar Sesión
+                      Cerrar SesiÃ³n
                     </button>
                   </div>
                 </motion.div>
@@ -2708,7 +3328,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
           onClick={() => setShowSettings(true)}
           className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg transition-all border`}
           style={{ backgroundColor: 'var(--text-color)', color: 'var(--bg-color)', borderColor: 'var(--border-color)' }}
-          title="Configuración"
+          title="ConfiguraciÃ³n"
         >
           <Settings className="w-6 h-6" />
         </button>
@@ -2722,7 +3342,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
           </div>
           <h1 className={`text-4xl font-semibold tracking-tight mb-3`}>CryptoToolbox & Checksum Verification</h1>
           <p className={`max-w-md mx-auto mb-6 opacity-60`}>
-            Herramientas avanzadas para verificación de integridad, generación de hashes y decodificación.
+            Herramientas avanzadas para verificaciÃ³n de integridad, generaciÃ³n de hashes y decodificaciÃ³n.
           </p>
           <button
             onClick={() => setShowFeatures(true)}
@@ -2737,8 +3357,8 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
         {/* Features Modal */}
         <AnimatePresence>
           {showFeatures && (
-            <motion.div 
-              key="features-modal" 
+            <motion.div
+              key="features-modal"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -2776,8 +3396,8 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                     <FeatureItem
                       icon={<Palette className="w-5 h-5" />}
-                      title="Gestión de Temas"
-                      description="Personalización avanzada con temas pre-definidos (Solarized, Gruvbox) y modo oscuro/claro."
+                      title="GestiÃ³n de Temas"
+                      description="PersonalizaciÃ³n avanzada con temas pre-definidos (Solarized, Gruvbox) y modo oscuro/claro."
                     />
                     <FeatureItem
                       icon={<Bell className="w-5 h-5" />}
@@ -2787,7 +3407,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                     <FeatureItem
                       icon={<Filter className="w-5 h-5" />}
                       title="Filtros Inteligentes"
-                      description="Búsqueda y clasificación avanzada en el historial de actividad global por tipo y usuario."
+                      description="BÃºsqueda y clasificaciÃ³n avanzada en el historial de actividad global por tipo y usuario."
                     />
                     <FeatureItem
                       icon={<User className="w-5 h-5" />}
@@ -2797,22 +3417,22 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                     <FeatureItem
                       icon={<Globe className="w-5 h-5" />}
                       title="Feed en Tiempo Real"
-                      description="Sincronización instantánea de actividades vía WebSockets para colaboración en vivo."
+                      description="SincronizaciÃ³n instantÃ¡nea de actividades vÃ­a WebSockets para colaboraciÃ³n en vivo."
                     />
                     <FeatureItem
                       icon={<Shield className="w-5 h-5" />}
-                      title="Verificación de Checksum"
-                      description="Validación de integridad contra bases de datos oficiales de software conocido."
+                      title="VerificaciÃ³n de Checksum"
+                      description="ValidaciÃ³n de integridad contra bases de datos oficiales de software conocido."
                     />
                     <FeatureItem
                       icon={<Search className="w-5 h-5" />}
-                      title="Búsqueda por IA"
-                      description="Identificación de archivos desconocidos mediante Gemini AI y búsqueda semántica."
+                      title="BÃºsqueda por IA"
+                      description="IdentificaciÃ³n de archivos desconocidos mediante Gemini AI y bÃºsqueda semÃ¡ntica."
                     />
                     <FeatureItem
                       icon={<Unlock className="w-5 h-5" />}
                       title="Decodificador Rainbow"
-                      description="Recuperación de texto plano mediante tablas de búsqueda y fuerza bruta optimizada."
+                      description="RecuperaciÃ³n de texto plano mediante tablas de bÃºsqueda y fuerza bruta optimizada."
                     />
                   </div>
 
@@ -2855,17 +3475,17 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
               className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mx-auto"
             >
               {[
-                { id: 'verify', label: 'Verificar Hash', icon: Shield, desc: 'Comprueba si un hash coincide con un texto o aplicación.', color: '#3b82f6' },
+                { id: 'verify', label: 'Verificar Hash', icon: Shield, desc: 'Comprueba si un hash coincide con un texto o aplicaciÃ³n.', color: '#3b82f6' },
                 { id: 'generate', label: 'Generar Hash', icon: Hash, desc: 'Crea hashes MD5, SHA1 y SHA256 a partir de textos.', color: '#f59e0b' },
                 { id: 'file', label: 'Hash de Archivo', icon: Download, desc: 'Analiza y extrae firmas digitales de cualquier archivo.', color: '#10b981' },
                 { id: 'decode', label: 'Decodificar', icon: Unlock, desc: 'Intenta revertir un hash usando fuerza bruta y diccionarios.', color: '#ef4444' },
                 { id: 'explorer', label: 'Explorador', icon: Search, desc: 'Busca en la base de datos global de hashes conocidos.', color: '#8b5cf6' },
                 { id: 'activity', label: 'Actividad Global', icon: Globe, desc: 'Observa las operaciones de hash en tiempo real.', color: '#06b6d4' },
-                { id: 'chat', label: 'Chat Global', icon: MessageSquare, desc: 'Comunícate con otros expertos en seguridad.', color: '#ec4899' },
+                { id: 'chat', label: 'Chat Global', icon: MessageSquare, desc: 'ComunÃ­cate con otros expertos en seguridad.', color: '#ec4899' },
                 { id: 'messages', label: 'Mensajes Directos', icon: Users, desc: 'Conversaciones privadas con otros operadores.', color: '#6366f1' },
-                { id: 'wiki', label: 'Wiki Algoritmos', icon: BookOpen, desc: 'Información técnica sobre algoritmos de hash.', color: '#14b8a6' },
-                { id: 'visualizer', label: 'Visualizador', icon: Cpu, desc: 'Observa paso a paso cómo se generan las rondas de un hash.', color: '#f97316' },
-                { id: 'reputation', label: 'Reputación', icon: Trophy, desc: 'Tu rango y puntos en la red de expertos en seguridad.', color: '#84cc16' },
+                { id: 'wiki', label: 'Wiki Algoritmos', icon: BookOpen, desc: 'InformaciÃ³n tÃ©cnica sobre algoritmos de hash.', color: '#14b8a6' },
+                { id: 'visualizer', label: 'Visualizador', icon: Cpu, desc: 'Observa paso a paso cÃ³mo se generan las rondas de un hash.', color: '#f97316' },
+                { id: 'reputation', label: 'ReputaciÃ³n', icon: Trophy, desc: 'Tu rango y puntos en la red de expertos en seguridad.', color: '#84cc16' },
               ].map((module) => (
                 <button
                   key={module.id}
@@ -2896,9 +3516,9 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                 style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)', color: 'var(--text-color)' }}
               >
                 <ChevronRight className="w-4 h-4 rotate-180 opacity-50 group-hover:opacity-100 transition-opacity" />
-                Volver al Menú
+                Volver al MenÃº
               </button>
-              
+
               <AnimatePresence mode="wait">
           {activeTab === 'file' && (
             <motion.div
@@ -2913,8 +3533,8 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                   <div className={`w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-6 border shadow-inner`} style={{ backgroundColor: 'var(--bg-color)', borderColor: 'var(--border-color)' }}>
                     <Download className={`w-10 h-10`} style={{ color: 'var(--accent-color)' }} />
                   </div>
-                  <h2 className="text-3xl font-bold tracking-tight mb-4">Análisis de Archivos</h2>
-                  <p className="opacity-60 text-sm mb-10 leading-relaxed">Sube cualquier aplicación o archivo (máx. 500MB) para generar su firma digital SHA-256 y registrarla en el protocolo global.</p>
+                  <h2 className="text-3xl font-bold tracking-tight mb-4">AnÃ¡lisis de Archivos</h2>
+                  <p className="opacity-60 text-sm mb-10 leading-relaxed">Sube cualquier aplicaciÃ³n o archivo (mÃ¡x. 500MB) para generar su firma digital SHA-256 y registrarla en el protocolo global.</p>
 
                   <div className="relative group">
                     <input
@@ -2928,13 +3548,13 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                       </div>
                       <div>
                         <p className="font-bold text-sm">Haga clic o arrastre un archivo</p>
-                        <p className="text-[10px] uppercase tracking-widest opacity-40 mt-1">Límite de 500MB &bull; SHA-256</p>
+                        <p className="text-[10px] uppercase tracking-widest opacity-40 mt-1">LÃ­mite de 500MB &bull; SHA-256</p>
                       </div>
                     </div>
                   </div>
 
                   {isHashing && (
-                    <motion.div 
+                    <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       className="mt-8 p-6 rounded-2xl border flex items-center gap-4"
@@ -2949,7 +3569,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                           <span className="text-xs font-mono font-bold text-emerald-500">{hashingProgress}%</span>
                         </div>
                         <div className="h-1.5 w-full bg-black/20 rounded-full overflow-hidden">
-                          <motion.div 
+                          <motion.div
                             className="h-full bg-emerald-500"
                             animate={{ width: `${hashingProgress}%` }}
                             transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
@@ -2972,7 +3592,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                               <Check className="w-4 h-4 text-emerald-500" />
                             </div>
                             <div>
-                              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Análisis de Integridad Exitoso</p>
+                              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">AnÃ¡lisis de Integridad Exitoso</p>
                               <p className="text-sm font-bold truncate max-w-[200px]">{selectedFile.name}</p>
                             </div>
                           </div>
@@ -2988,17 +3608,17 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                                   }
                                   setSelectedFile(null);
                                   setFileHashes(null);
-                                  toast.success("Análisis y hashes eliminados");
+                                  toast.success("AnÃ¡lisis y hashes eliminados");
                                 }}
                                 className="p-2 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors"
-                                title="Eliminar análisis y hashes"
+                                title="Eliminar anÃ¡lisis y hashes"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
                             )}
                           </div>
                         </div>
-                        
+
                         <div className="space-y-4">
                           {[
                             { label: 'MD5', value: fileHashes.md5 },
@@ -3042,7 +3662,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                             <div className="flex items-center justify-between p-3 rounded-xl bg-black/5 border border-white/5">
                               <div className="flex items-center gap-2">
                                 <Globe className="w-4 h-4 opacity-40" />
-                                <span className="text-xs opacity-60">Reputación Global</span>
+                                <span className="text-xs opacity-60">ReputaciÃ³n Global</span>
                               </div>
                               <span className="text-xs font-bold text-emerald-500">LIMPIO / CONFIABLE</span>
                             </div>
@@ -3054,7 +3674,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                               <span className="text-xs font-bold text-emerald-500">0% AMENAZA</span>
                             </div>
                             <p className="text-[10px] opacity-40 italic mt-2 text-center">
-                              * Análisis basado en bases de datos de firmas digitales conocidas y heurística local.
+                              * AnÃ¡lisis basado en bases de datos de firmas digitales conocidas y heurÃ­stica local.
                             </p>
                           </div>
                         </div>
@@ -3144,7 +3764,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                     .map(({ value, hashes }, idx) => {
                       const displayHash = hashes[selectedHashType] || hashes.default || '';
                       if (!displayHash) return null;
-                      
+
                       return (
                       <motion.div
                         key={`${value}-${idx}`}
@@ -3160,7 +3780,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                             <div className="h-px flex-1 bg-current opacity-10" />
                           </div>
                           <p className="font-bold text-lg truncate mb-6">{value}</p>
-                          
+
                           <div className="mt-6">
                             <div className="flex items-center gap-3 mb-2">
                               <span className={`text-[10px] font-bold uppercase tracking-widest opacity-40 whitespace-nowrap`}>Firma Digital</span>
@@ -3171,7 +3791,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                             <p className="font-mono text-xs opacity-70 break-all leading-relaxed tracking-tight">{displayHash}</p>
                           </div>
                         </div>
-                        
+
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => handleCopy(value, `explorer-val-${idx}`)}
@@ -3209,11 +3829,11 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                         </div>
                       </motion.div>
                     )})}
-                  
+
                   {Object.entries(hashCache).length === 0 && (
                     <div className="text-center py-20 opacity-40">
                       <Database className="w-16 h-16 mx-auto mb-4 opacity-20" />
-                      <p>La base de datos está vacía.</p>
+                      <p>La base de datos estÃ¡ vacÃ­a.</p>
                     </div>
                   )}
                 </div>
@@ -3233,7 +3853,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                         Anterior
                       </button>
                       <span className="px-4 text-sm font-medium">
-                        Página {explorerPage} de {Math.ceil(filteredExplorerHashes.length / 100)}
+                        PÃ¡gina {explorerPage} de {Math.ceil(filteredExplorerHashes.length / 100)}
                       </span>
                       <button
                         onClick={() => setExplorerPage(p => Math.min(Math.ceil(filteredExplorerHashes.length / 100), p + 1))}
@@ -3265,7 +3885,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                     <Globe className={`w-5 h-5`} style={{ color: 'var(--accent-color)' }} />
                     <h2 className={`text-lg font-semibold`}>Actividad Global en Tiempo Real</h2>
                   </div>
-                  
+
                   {/* Filters & Sorting Controls */}
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="relative group">
@@ -3277,10 +3897,10 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                         style={{ backgroundColor: 'var(--bg-color)', borderColor: 'var(--border-color)', color: 'var(--text-color)' }}
                       >
                         <option value="all">Todos los tipos</option>
-                        <option value="generate">Generación</option>
-                        <option value="decode">Decodificación</option>
-                        <option value="verify">Verificación</option>
-                        <option value="file">Análisis de Archivo</option>
+                        <option value="generate">GeneraciÃ³n</option>
+                        <option value="decode">DecodificaciÃ³n</option>
+                        <option value="verify">VerificaciÃ³n</option>
+                        <option value="file">AnÃ¡lisis de Archivo</option>
                       </select>
                     </div>
 
@@ -3307,7 +3927,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                           }
                         }}
                         className={`px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all flex items-center gap-2`}
-                        style={{ 
+                        style={{
                           backgroundColor: activitySortBy === 'timestamp' ? 'var(--accent-color)' : 'var(--bg-color)',
                           color: activitySortBy === 'timestamp' ? 'var(--bg-color)' : 'var(--text-color)',
                           borderColor: 'var(--border-color)',
@@ -3329,7 +3949,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                           }
                         }}
                         className={`px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all flex items-center gap-2`}
-                        style={{ 
+                        style={{
                           backgroundColor: activitySortBy === 'username' ? 'var(--accent-color)' : 'var(--bg-color)',
                           color: activitySortBy === 'username' ? 'var(--bg-color)' : 'var(--text-color)',
                           borderColor: 'var(--border-color)',
@@ -3366,7 +3986,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                   {filteredActivities.length === 0 ? (
                     <div className="text-center py-12">
                       <Globe className={`w-12 h-12 mx-auto mb-4 opacity-20`} />
-                      <p className={`text-sm opacity-40`}>No se encontró actividad con los filtros seleccionados.</p>
+                      <p className={`text-sm opacity-40`}>No se encontrÃ³ actividad con los filtros seleccionados.</p>
                     </div>
                   ) : (
                     filteredActivities.map((activity) => (
@@ -3383,20 +4003,20 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                               <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl border overflow-hidden`} style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
                                 {activity.type === 'file' ? (
                                   <File className="w-5 h-5 text-amber-500" />
-                                ) : activity.user_avatar && activity.user_avatar !== '👤' ? (
+                                ) : activity.user_avatar && activity.user_avatar !== 'ðŸ‘¤' ? (
                                   <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${activity.user_avatar}`} className="w-full h-full object-cover" alt={activity.user_name} />
                                 ) : (
-                                  '👤'
+                                  'ðŸ‘¤'
                                 )}
                               </div>
                               <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-lg flex items-center justify-center border shadow-sm ${
-                                activity.type === 'generate' ? 'bg-blue-500 text-white border-blue-600' : 
-                                activity.type === 'decode' ? 'bg-purple-500 text-white border-purple-600' : 
+                                activity.type === 'generate' ? 'bg-blue-500 text-white border-blue-600' :
+                                activity.type === 'decode' ? 'bg-purple-500 text-white border-purple-600' :
                                 activity.type === 'file' ? 'bg-amber-500 text-white border-amber-600' :
                                 'bg-emerald-500 text-white border-emerald-600'
                               }`}>
-                                {activity.type === 'generate' ? <Hash className="w-2.5 h-2.5" /> : 
-                                 activity.type === 'decode' ? <Unlock className="w-2.5 h-2.5" /> : 
+                                {activity.type === 'generate' ? <Hash className="w-2.5 h-2.5" /> :
+                                 activity.type === 'decode' ? <Unlock className="w-2.5 h-2.5" /> :
                                  activity.type === 'file' ? <Download className="w-2.5 h-2.5" /> :
                                  <Shield className="w-2.5 h-2.5" />}
                               </div>
@@ -3404,13 +4024,13 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                             <div>
                               <div className="flex items-center gap-2">
                                 <span className={`text-xs font-bold`} style={{ color: 'var(--accent-color)' }}>
-                                  {activity.user_name || 'Anónimo'}
+                                  {activity.user_name || 'AnÃ³nimo'}
                                 </span>
                                 <span className={`text-[10px] font-medium opacity-50`}>
-                                  {activity.type === 'generate' ? 'generó un hash' : 
-                                   activity.type === 'decode' ? 'decodificó un hash' : 
-                                   activity.type === 'file' ? 'analizó un archivo' :
-                                   'verificó integridad'}
+                                  {activity.type === 'generate' ? 'generÃ³ un hash' :
+                                   activity.type === 'decode' ? 'decodificÃ³ un hash' :
+                                   activity.type === 'file' ? 'analizÃ³ un archivo' :
+                                   'verificÃ³ integridad'}
                                 </span>
                               </div>
                               <div className="mt-3 flex flex-col gap-3">
@@ -3513,7 +4133,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
               transition={{ duration: 0.2 }}
               className="space-y-8"
             >
-              <div 
+              <div
                 className="rounded-2xl border shadow-sm p-8 transition-colors"
                 style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}
               >
@@ -3530,8 +4150,8 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                       onChange={(e) => setTextToHash(e.target.value)}
                       placeholder="Escribe el texto que deseas convertir en hash..."
                       className="w-full p-4 border rounded-xl font-sans text-sm transition-all focus:outline-none focus:border-emerald-50 focus:ring-2 focus:ring-emerald-500/20 min-h-[120px] resize-none select-text"
-                      style={{ 
-                        backgroundColor: 'var(--bg-color)', 
+                      style={{
+                        backgroundColor: 'var(--bg-color)',
                         borderColor: 'var(--border-color)',
                         color: 'var(--text-color)'
                       }}
@@ -3560,13 +4180,13 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                   </div>
 
                   {recentCached.length > 0 && (
-                    <div 
+                    <div
                       className="mt-8 pt-6 border-t"
                       style={{ borderColor: 'var(--border-color)' }}
                     >
                       <div className="flex items-center justify-between mb-4">
                         <h3 className="text-xs font-bold uppercase tracking-widest opacity-50" style={{ color: 'var(--text-color)' }}>Indexado en Tiempo Real</h3>
-                        <span className="text-[10px] font-medium text-emerald-600">Cualquier valor ingresado se guarda automáticamente</span>
+                        <span className="text-[10px] font-medium text-emerald-600">Cualquier valor ingresado se guarda automÃ¡ticamente</span>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {recentCached.map((item, idx) => (
@@ -3575,8 +4195,8 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                             initial={{ opacity: 0, scale: 0.9 }}
                             animate={{ opacity: 1, scale: 1 }}
                             className="px-3 py-1.5 border rounded-lg text-[10px] font-mono flex flex-col gap-1"
-                            style={{ 
-                              backgroundColor: 'rgba(16, 185, 129, 0.1)', 
+                            style={{
+                              backgroundColor: 'rgba(16, 185, 129, 0.1)',
                               borderColor: 'rgba(16, 185, 129, 0.2)',
                               color: '#10b981'
                             }}
@@ -3597,7 +4217,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                               )}
                             </div>
                             <div className="flex gap-1 opacity-60 text-[8px] uppercase font-bold">
-                              <span>MD5</span> • <span>SHA1</span> • <span>SHA256</span>
+                              <span>MD5</span> â€¢ <span>SHA1</span> â€¢ <span>SHA256</span>
                             </div>
                           </motion.div>
                         ))}
@@ -3618,7 +4238,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
               transition={{ duration: 0.2 }}
               className="space-y-8"
             >
-              <div 
+              <div
                 className="rounded-2xl border shadow-sm p-8 transition-colors"
                 style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}
               >
@@ -3637,7 +4257,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                         onChange={(e) => {
                           const cleaned = smartCleanHash(e.target.value);
                           if (cleaned.length > 64) {
-                            setDecodeInputError("Hash demasiado largo (máx 64 caracteres)");
+                            setDecodeInputError("Hash demasiado largo (mÃ¡x 64 caracteres)");
                             setTimeout(() => setDecodeInputError(null), 3000);
                           }
                           setHashToDecode(cleaned.substring(0, 64));
@@ -3648,8 +4268,8 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                             ? 'border-orange-400 focus:ring-orange-500/20'
                             : 'focus:border-emerald-500 focus:ring-emerald-500/20'
                         }`}
-                        style={{ 
-                          backgroundColor: 'var(--bg-color)', 
+                        style={{
+                          backgroundColor: 'var(--bg-color)',
                           borderColor: 'var(--border-color)',
                           color: 'var(--text-color)'
                         }}
@@ -3676,8 +4296,8 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                             }
                           }}
                           className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 transition-colors rounded-lg border"
-                          style={{ 
-                            color: 'var(--accent-color)', 
+                          style={{
+                            color: 'var(--accent-color)',
                             backgroundColor: 'rgba(16, 185, 129, 0.1)',
                             borderColor: 'rgba(16, 185, 129, 0.2)'
                           }}
@@ -3737,10 +4357,10 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                           <div className="space-y-4">
                             <div className="flex items-center gap-3 text-emerald-400">
                               <Check className="w-6 h-6 text-emerald-500" />
-                              <h3 className="text-lg font-semibold">¡Hash Decodificado!</h3>
+                              <h3 className="text-lg font-semibold">Â¡Hash Decodificado!</h3>
                             </div>
                             <div className="relative group">
-                              <div 
+                              <div
                                 className="p-4 rounded-lg border font-mono text-lg text-center break-all"
                                 style={{ backgroundColor: 'rgba(0,0,0,0.2)', borderColor: 'rgba(16, 185, 129, 0.3)', color: '#10b981' }}
                               >
@@ -3776,7 +4396,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                             </div>
                             <div className="grid grid-cols-2 gap-4 pt-2">
                               <div className="text-emerald-500/70">
-                                <span className="text-[10px] font-bold uppercase tracking-widest block mb-1">Método</span>
+                                <span className="text-[10px] font-bold uppercase tracking-widest block mb-1">MÃ©todo</span>
                                 <div className="flex items-center gap-1.5 text-xs">
                                   {decodeResult.method === 'database' ? (
                                     <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20">
@@ -3785,7 +4405,7 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                                   ) : decodeResult.method === 'brute-force' ? (
                                     'Diccionario / Fuerza Bruta'
                                   ) : (
-                                    'Búsqueda en Línea (AI)'
+                                    'BÃºsqueda en LÃ­nea (AI)'
                                   )}
                                 </div>
                               </div>
@@ -3818,20 +4438,20 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
                     )}
                   </AnimatePresence>
 
-                  <div 
+                  <div
                     className="p-4 border rounded-xl transition-colors"
                     style={{ backgroundColor: 'rgba(255, 255, 255, 0.02)', borderColor: 'var(--border-color)' }}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-xs font-bold uppercase tracking-widest opacity-50" style={{ color: 'var(--text-color)' }}>Cómo funciona</h4>
+                      <h4 className="text-xs font-bold uppercase tracking-widest opacity-50" style={{ color: 'var(--text-color)' }}>CÃ³mo funciona</h4>
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border text-emerald-600 bg-emerald-500/10 border-emerald-500/20">
                         {Object.keys(hashCache).length} hashes en memoria
                       </span>
                     </div>
                     <ul className="text-xs space-y-2 list-disc pl-4 opacity-50" style={{ color: 'var(--text-color)' }}>
-                      <li>Primero consultamos nuestra "Rainbow Table" local (caché), que guarda instantáneamente cualquier hash generado en esta sesión.</li>
-                      <li>También incluye un diccionario pre-cargado de contraseñas comunes y hashes de aplicaciones oficiales para una decodificación inmediata.</li>
-                      <li>Si no hay éxito local, utilizamos inteligencia artificial para buscar el hash en bases de datos públicas.</li>
+                      <li>Primero consultamos nuestra "Rainbow Table" local (cachÃ©), que guarda instantÃ¡neamente cualquier hash generado en esta sesiÃ³n.</li>
+                      <li>Tambien incluye un diccionario pre-cargado de valores comunes para una decodificacion inmediata.</li>
+                      <li>Si no hay Ã©xito local, utilizamos inteligencia artificial para buscar el hash en bases de datos pÃºblicas.</li>
                     </ul>
                   </div>
                 </div>
@@ -3844,12 +4464,12 @@ Si NO lo encuentras tras buscar exhaustivamente, responde exactamente: NOT_FOUND
         </AnimatePresence>
 
         {/* Footer */}
-        <footer 
+        <footer
           className="mt-20 pt-8 border-t text-center"
           style={{ borderColor: 'var(--border-color)' }}
         >
           <p className="text-xs font-mono uppercase tracking-widest opacity-30" style={{ color: 'var(--text-color)' }}>
-            Utilidad de Seguridad &bull; Verificación de Integridad
+            Utilidad de Seguridad &bull; VerificaciÃ³n de Integridad
           </p>
         </footer>
 
@@ -3884,20 +4504,20 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
   const handleVerify = async () => {
     if (!currentApp || !userHash.trim()) return;
     setIsVerifying(true);
-    
+
     await new Promise(resolve => setTimeout(resolve, 1500));
-    
+
     const targetHash = userHash.trim().toLowerCase();
     let result = { match: false, type: '' };
-    
+
     if (targetHash === currentApp.md5.toLowerCase()) result = { match: true, type: 'MD5' };
     else if (targetHash === currentApp.sha1.toLowerCase()) result = { match: true, type: 'SHA1' };
     else if (targetHash === currentApp.sha256.toLowerCase()) result = { match: true, type: 'SHA256' };
-    
+
     if (result.match) {
       awardPoints(10); // Award 10 points for successful verification
     }
-    
+
     setVerifyResult(result);
     setIsVerified(true);
     setIsVerifying(false);
@@ -3908,7 +4528,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
       method: 'DELETE'
     }).then(res => {
       if (res.ok) {
-        toast.success('Aplicación eliminada');
+        toast.success('AplicaciÃ³n eliminada');
         onRefresh();
         if (selectedApp === apps.find(a => a.id === id)?.key) setSelectedApp(null);
       }
@@ -3924,7 +4544,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
       body: JSON.stringify(app)
     });
     if (res.ok) {
-      toast.success(app.id ? 'Aplicación actualizada' : 'Aplicación creada');
+      toast.success(app.id ? 'AplicaciÃ³n actualizada' : 'AplicaciÃ³n creada');
       setIsEditorOpen(false);
       onRefresh();
     }
@@ -3944,7 +4564,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
             <Shield className="w-6 h-6 text-blue-500" />
           </div>
           <div>
-            <h2 className="text-2xl font-bold tracking-tight">Verificación de Integridad</h2>
+            <h2 className="text-2xl font-bold tracking-tight">VerificaciÃ³n de Integridad</h2>
             <p className="text-sm opacity-60">Comprueba la autenticidad de tus aplicaciones.</p>
           </div>
         </div>
@@ -3977,7 +4597,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
                     ? 'shadow-md ring-1 ring-emerald-500/20'
                     : 'hover:shadow-sm'
                 }`}
-                style={{ 
+                style={{
                   backgroundColor: selectedApp === app.key ? 'var(--bg-color)' : 'transparent',
                   borderColor: selectedApp === app.key ? 'var(--accent-color)' : 'var(--border-color)',
                   opacity: selectedApp === app.key ? 1 : 0.7
@@ -4059,16 +4679,16 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
                         setUserHash(e.target.value);
                         setIsVerified(false);
                       }}
-                      placeholder="Pega el hash de tu archivo aquí..."
+                      placeholder="Pega el hash de tu archivo aquÃ­..."
                       className="w-full p-5 pr-32 rounded-xl border bg-black/5 font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
                       style={{ borderColor: 'var(--border-color)', color: 'var(--text-color)' }}
                     />
                     <button
                       onClick={async () => {
                         try {
-                          const input = document.querySelector('input[placeholder="Pega el hash de tu archivo aquí..."]') as HTMLInputElement;
+                          const input = document.querySelector('input[placeholder="Pega el hash de tu archivo aquÃ­..."]') as HTMLInputElement;
                           if (input) input.focus();
-                          
+
                           const text = await navigator.clipboard.readText();
                           if (text) {
                             setUserHash(text.trim());
@@ -4108,7 +4728,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
                         <div className="w-16 h-16 rounded-full bg-black/5 flex items-center justify-center mx-auto opacity-20">
                           <Shield className="w-8 h-8" />
                         </div>
-                        <p className="text-xs opacity-40 font-bold uppercase tracking-widest">Esperando firma digital para análisis...</p>
+                        <p className="text-xs opacity-40 font-bold uppercase tracking-widest">Esperando firma digital para anÃ¡lisis...</p>
                       </motion.div>
                     ) : (
                       <motion.div key="result" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="space-y-6 z-10 w-full max-w-lg">
@@ -4117,12 +4737,12 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
                         </div>
                         <div className="space-y-2">
                           <h4 className={`text-2xl font-black uppercase tracking-tight ${verifyResult?.match ? 'text-emerald-500' : 'text-red-500'}`}>
-                            {verifyResult?.match ? '¡INTEGRIDAD VERIFICADA!' : 'FIRMA NO COINCIDE'}
+                            {verifyResult?.match ? 'Â¡INTEGRIDAD VERIFICADA!' : 'FIRMA NO COINCIDE'}
                           </h4>
                           <p className="text-sm opacity-70 leading-relaxed font-medium">
-                            {verifyResult?.match 
-                              ? `Este archivo es 100% auténtico y coincide exactamente con la firma oficial de ${currentApp.name}.` 
-                              : 'Atención: La firma digital proporcionada no coincide con ninguna versión oficial conocida.'}
+                            {verifyResult?.match
+                              ? `Este archivo es 100% autÃ©ntico y coincide exactamente con la firma oficial de ${currentApp.name}.`
+                              : 'AtenciÃ³n: La firma digital proporcionada no coincide con ninguna versiÃ³n oficial conocida.'}
                           </p>
                         </div>
                         {verifyResult?.match && (
@@ -4161,7 +4781,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
                     COPIAR TODO
                   </button>
                 </div>
-                
+
                 <div className="space-y-6">
                   {['md5', 'sha1', 'sha256'].map(type => (
                     <div key={type} className="space-y-4">
@@ -4192,7 +4812,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
           ) : (
             <div className="flex flex-col items-center justify-center py-20 text-center space-y-6">
               <div className="w-24 h-24 rounded-3xl bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20"><Shield className="w-10 h-10 text-emerald-500" /></div>
-              <div className="max-w-md"><h3 className="text-2xl font-bold mb-2">Verificación de Integridad</h3><p className="text-sm opacity-60 leading-relaxed">Selecciona una aplicación de la lista superior para verificar si el archivo que tienes es la versión oficial y no ha sido modificado.</p></div>
+              <div className="max-w-md"><h3 className="text-2xl font-bold mb-2">VerificaciÃ³n de Integridad</h3><p className="text-sm opacity-60 leading-relaxed">Selecciona una aplicaciÃ³n de la lista superior para verificar si el archivo que tienes es la versiÃ³n oficial y no ha sido modificado.</p></div>
             </div>
           )}
         </AnimatePresence>
@@ -4211,8 +4831,8 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
             isOpen={!!appToDelete}
             onClose={() => setAppToDelete(null)}
             onConfirm={() => handleDelete(appToDelete.id)}
-            title="¿Eliminar aplicación?"
-            description={`¿Estás seguro de eliminar "${appToDelete.name}"? Esta acción no se puede deshacer.`}
+            title="Â¿Eliminar aplicaciÃ³n?"
+            description={`Â¿EstÃ¡s seguro de eliminar "${appToDelete.name}"? Esta acciÃ³n no se puede deshacer.`}
             confirmLabel="Eliminar"
           />
         )}
@@ -4237,13 +4857,13 @@ function AppEditor({ app, onClose, onSave }: { app: any, onClose: () => void, on
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-2xl rounded-[2.5rem] bg-white shadow-2xl border overflow-hidden" style={{ backgroundColor: 'var(--bg-color)', borderColor: 'var(--border-color)' }}>
         <div className="p-8 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-color)' }}>
-          <h2 className="text-xl font-bold">{app ? 'Editar Aplicación' : 'Nueva Aplicación'}</h2>
+          <h2 className="text-xl font-bold">{app ? 'Editar AplicaciÃ³n' : 'Nueva AplicaciÃ³n'}</h2>
           <button onClick={onClose} className="p-2 rounded-xl hover:bg-black/5 transition-colors"><X className="w-5 h-5" /></button>
         </div>
         <div className="p-8 space-y-4 max-h-[70vh] overflow-y-auto custom-scrollbar">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Key (Único)</label>
+              <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Key (Ãšnico)</label>
               <input type="text" value={formData.key} onChange={e => setFormData({ ...formData, key: e.target.value })} className="w-full p-3 rounded-xl border bg-black/5" placeholder="Ej: putty" />
             </div>
             <div className="space-y-2">
@@ -4252,7 +4872,7 @@ function AppEditor({ app, onClose, onSave }: { app: any, onClose: () => void, on
             </div>
           </div>
           <div className="space-y-2">
-            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Descripción</label>
+            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">DescripciÃ³n</label>
             <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} className="w-full p-3 rounded-xl border bg-black/5 h-24 resize-none" />
           </div>
           <div className="space-y-2">
@@ -4357,7 +4977,7 @@ function AlgorithmWiki({ userProfile }: { userProfile: any }) {
           </div>
           <div>
             <h2 className="text-2xl font-bold tracking-tight">Wiki de Algoritmos</h2>
-            <p className="text-sm opacity-60">Enciclopedia técnica de funciones criptográficas.</p>
+            <p className="text-sm opacity-60">Enciclopedia tÃ©cnica de funciones criptogrÃ¡ficas.</p>
           </div>
         </div>
         {userProfile.role === 'admin' && (
@@ -4408,7 +5028,7 @@ function AlgorithmWiki({ userProfile }: { userProfile: any }) {
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-4">
                   <h3 className="text-2xl font-bold">{algo.name}</h3>
-                  <span 
+                  <span
                     className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border"
                     style={{ borderColor: algo.statusColor, color: algo.statusColor, backgroundColor: `${algo.statusColor}10` }}
                   >
@@ -4417,7 +5037,7 @@ function AlgorithmWiki({ userProfile }: { userProfile: any }) {
                 </div>
                 <p className="text-xs font-bold uppercase tracking-widest opacity-40 mb-2">{algo.fullName}</p>
                 <p className="text-sm leading-relaxed mb-6 opacity-80">{algo.description}</p>
-                
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   <div className="p-4 rounded-2xl bg-black/5 border border-black/5">
                     <h4 className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2">Uso Recomendado</h4>
@@ -4447,8 +5067,8 @@ function AlgorithmWiki({ userProfile }: { userProfile: any }) {
             isOpen={!!algoToDelete}
             onClose={() => setAlgoToDelete(null)}
             onConfirm={() => handleDelete(algoToDelete.id)}
-            title="¿Eliminar algoritmo?"
-            description={`¿Estás seguro de eliminar "${algoToDelete.name}"? Esta acción no se puede deshacer.`}
+            title="Â¿Eliminar algoritmo?"
+            description={`Â¿EstÃ¡s seguro de eliminar "${algoToDelete.name}"? Esta acciÃ³n no se puede deshacer.`}
             confirmLabel="Eliminar"
           />
         )}
@@ -4537,12 +5157,12 @@ function WikiEditor({ algo, onClose, onSave }: { algo: any, onClose: () => void,
             </div>
           </div>
           <div className="space-y-2">
-            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Descripción</label>
+            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">DescripciÃ³n</label>
             <textarea
               value={formData.description}
               onChange={e => setFormData({ ...formData, description: e.target.value })}
               className="w-full p-3 rounded-xl border bg-black/5 min-h-[100px]"
-              placeholder="Descripción del algoritmo..."
+              placeholder="DescripciÃ³n del algoritmo..."
             />
           </div>
           <div className="space-y-2">
@@ -4551,7 +5171,7 @@ function WikiEditor({ algo, onClose, onSave }: { algo: any, onClose: () => void,
               value={formData.useCase}
               onChange={e => setFormData({ ...formData, useCase: e.target.value })}
               className="w-full p-3 rounded-xl border bg-black/5 min-h-[80px]"
-              placeholder="¿Cuándo usarlo?"
+              placeholder="Â¿CuÃ¡ndo usarlo?"
             />
           </div>
           <div className="space-y-2">
@@ -4601,19 +5221,19 @@ function SettingsModal({ currentTheme, notificationPrefs, onClose, onThemeChange
         className="relative w-full max-w-2xl rounded-[2.5rem] shadow-2xl border overflow-hidden"
         style={{ backgroundColor: 'var(--bg-color)', borderColor: 'var(--border-color)' }}
       >
-        <div 
+        <div
           className="p-8 border-b flex items-center justify-between"
           style={{ borderColor: 'var(--border-color)' }}
         >
           <div className="flex items-center gap-3">
-            <div 
+            <div
               className="w-10 h-10 rounded-xl flex items-center justify-center border"
               style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)', color: 'var(--accent-color)' }}
             >
               <Settings className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-xl font-bold tracking-tight" style={{ color: 'var(--text-color)' }}>Configuración del Sistema</h2>
+              <h2 className="text-xl font-bold tracking-tight" style={{ color: 'var(--text-color)' }}>ConfiguraciÃ³n del Sistema</h2>
               <p className="text-xs font-medium opacity-50" style={{ color: 'var(--text-color)' }}>Personaliza tu entorno de trabajo</p>
             </div>
           </div>
@@ -4642,8 +5262,8 @@ function SettingsModal({ currentTheme, notificationPrefs, onClose, onThemeChange
                     className={`p-4 rounded-2xl border-2 text-left transition-all group relative overflow-hidden ${
                       currentTheme.id === theme.id ? 'ring-2 ring-emerald-500/20' : ''
                     }`}
-                    style={{ 
-                      backgroundColor: 'var(--surface-color)', 
+                    style={{
+                      backgroundColor: 'var(--surface-color)',
                       borderColor: currentTheme.id === theme.id ? '#10b981' : 'var(--border-color)'
                     }}
                   >
@@ -4680,13 +5300,13 @@ function SettingsModal({ currentTheme, notificationPrefs, onClose, onThemeChange
                 />
                 <NotificationToggle
                   label="Descubrimientos Raros"
-                  description="Alertar cuando se decodifique un hash poco común."
+                  description="Alertar cuando se decodifique un hash poco comÃºn."
                   active={notificationPrefs.rareHash}
                   onChange={(val) => onNotificationPrefsChange({ ...notificationPrefs, rareHash: val })}
                 />
                 <NotificationToggle
                   label="Coincidencias de Archivos"
-                  description="Notificar cuando una verificación coincida con un archivo conocido."
+                  description="Notificar cuando una verificaciÃ³n coincida con un archivo conocido."
                   active={notificationPrefs.verificationMatch}
                   onChange={(val) => onNotificationPrefsChange({ ...notificationPrefs, verificationMatch: val })}
                 />
@@ -4695,7 +5315,7 @@ function SettingsModal({ currentTheme, notificationPrefs, onClose, onThemeChange
           </div>
         </div>
 
-        <div 
+        <div
           className="p-8 border-t flex justify-end"
           style={{ borderColor: 'var(--border-color)' }}
         >
@@ -4718,7 +5338,7 @@ function NotificationToggle({ label, description, active, onChange }: {
   onChange: (val: boolean) => void
 }) {
   return (
-    <div 
+    <div
       className="flex items-center justify-between p-4 rounded-2xl border transition-colors"
       style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}
     >
@@ -4744,11 +5364,11 @@ function NotificationToggle({ label, description, active, onChange }: {
 
 function FeatureItem({ icon, title, description }: { icon: ReactNode, title: string, description: string }) {
   return (
-    <div 
+    <div
       className="flex gap-4 p-5 rounded-3xl border transition-all group"
       style={{ backgroundColor: 'var(--bg-color)', borderColor: 'var(--border-color)' }}
     >
-      <div 
+      <div
         className="w-12 h-12 rounded-2xl flex items-center justify-center border shadow-sm group-hover:scale-110 transition-transform shrink-0"
         style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)', color: 'var(--accent-color)' }}
       >
@@ -4776,18 +5396,18 @@ function HashRow({
   isMatched?: boolean
 }) {
   return (
-    <div 
+    <div
       className={`group relative p-4 rounded-xl border transition-all ${
         isMatched ? 'ring-1 ring-emerald-500/20' : ''
       }`}
-      style={{ 
+      style={{
         backgroundColor: isMatched ? 'rgba(16, 185, 129, 0.1)' : 'var(--surface-color)',
         borderColor: isMatched ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-color)'
       }}
     >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <label 
+          <label
             className="text-xs font-mono font-bold uppercase tracking-wider"
             style={{ color: isMatched ? '#10b981' : 'var(--text-color)', opacity: isMatched ? 1 : 0.5 }}
           >
@@ -4831,7 +5451,7 @@ function HashRow({
           </AnimatePresence>
         </button>
       </div>
-      <div 
+      <div
         className="font-mono text-sm break-all leading-relaxed transition-colors"
         style={{ color: isMatched ? '#10b981' : 'var(--text-color)' }}
       >

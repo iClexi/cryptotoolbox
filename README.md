@@ -20,6 +20,7 @@ The assignment also required a public domain, SSL certificate validation with Le
 - Online/local hash decoding helpers.
 - Algorithm wiki with security notes.
 - User profiles, reputation, global chat, private messages, and activity feed.
+- Login, registration, terms acceptance, and SMTP-ready PIN recovery.
 - Hardened Express API using PostgreSQL, signed sessions, HttpOnly cookies, CSP, and stricter input validation.
 
 ## Tech Stack

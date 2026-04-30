@@ -4,25 +4,32 @@ import type { NextFunction, Request, Response } from "express";
 import helmet from "helmet";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { createServer } from "http";
 import { Pool } from "pg";
 import type { QueryResultRow } from "pg";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
+import * as nodemailer from "nodemailer";
+import { GoogleGenAI } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const isProduction = process.env.NODE_ENV === "production";
+const isProduction = process.env.NODE_ENV === "production" || process.env.APP_ENV === "production";
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_COOKIE = "ct_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
+const configuredResetTtl = Number(process.env.RESET_TOKEN_TTL_MINUTES || 30);
+const RESET_TOKEN_TTL_MINUTES = Number.isFinite(configuredResetTtl)
+  ? Math.min(1440, Math.max(10, configuredResetTtl))
+  : 30;
 const HASH_RE = /^(?:[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const USERNAME_RE = /^[A-Za-z0-9_. -]{3,40}$/;
 const PIN_RE = /^\d{4}$/;
 const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
 const UNSAFE_TEXT_RE = /(?:<|>|\u0000|javascript:|data:text|file:|(?:^|[\\/])\.\.(?:[\\/]|$)|(?:^|[\\/])etc[\\/]passwd|[a-zA-Z]:[\\/]|WEB-INF[\\/\\]|--\s*$|;\s*(?:drop|select|insert|update|delete)\b)/i;
+const GENDER_VALUES = new Set(["masculino", "femenino", "otro", "prefiero_no_decir"]);
 
 const configuredSessionSecret = process.env.SESSION_SECRET?.trim();
 const sessionSecret = configuredSessionSecret || (isProduction ? "" : randomBytes(32).toString("hex"));
@@ -48,6 +55,11 @@ type PublicUser = {
   id: number;
   username: string;
   email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  birth_date: string | Date | null;
+  gender: string | null;
+  terms_accepted_at: string | Date | null;
   avatar_seed: string;
   role: "user" | "admin";
   points: number;
@@ -147,6 +159,51 @@ function normalizePin(value: unknown): string {
   return value;
 }
 
+function normalizeResetToken(value: unknown): string {
+  const token = normalizeString(value, "token", 200);
+  if (!/^[A-Za-z0-9_-]{32,200}$/.test(token)) {
+    throw httpError(400, "token invalido");
+  }
+  return token;
+}
+
+function normalizePersonName(value: unknown, field: string): string {
+  const name = normalizeString(value, field, 80);
+  if (name.length < 2) throw httpError(400, `${field} demasiado corto`);
+  return name;
+}
+
+function normalizeBirthDate(value: unknown): string {
+  const birthDate = normalizeString(value, "birthDate", 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) {
+    throw httpError(400, "fecha de nacimiento invalida");
+  }
+
+  const parsed = new Date(`${birthDate}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== birthDate) {
+    throw httpError(400, "fecha de nacimiento invalida");
+  }
+
+  const year = parsed.getUTCFullYear();
+  const today = new Date();
+  if (year < 1900 || parsed > today) {
+    throw httpError(400, "fecha de nacimiento fuera de rango");
+  }
+
+  return birthDate;
+}
+
+function normalizeGender(value: unknown): string {
+  const gender = normalizeString(value, "gender", 30);
+  if (!GENDER_VALUES.has(gender)) throw httpError(400, "genero invalido");
+  return gender;
+}
+
+function normalizeTermsAccepted(value: unknown): true {
+  if (value !== true) throw httpError(400, "debes aceptar los terminos y condiciones");
+  return true;
+}
+
 function normalizeId(value: unknown, field = "id"): number {
   const id = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(id) || id < 1) throw httpError(400, `${field} invalido`);
@@ -244,6 +301,78 @@ function verifyPin(pin: string, storedPin: string | null | undefined): boolean {
   return expected.length === candidate.length && timingSafeEqual(candidate, expected);
 }
 
+function hashResetToken(token: string): string {
+  return createHash("sha256").update(`${sessionSecret}:${token}`).digest("hex");
+}
+
+function getPublicAppUrl(): string {
+  return process.env.APP_URL || `http://localhost:${PORT}`;
+}
+
+function isSmtpConfigured(): boolean {
+  return Boolean(process.env.SMTP_HOST?.trim());
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function sendPasswordResetEmail(to: string, username: string, resetUrl: string) {
+  if (!isSmtpConfigured()) {
+    if (!isProduction && process.env.PASSWORD_RESET_DEV_OUTPUT === "true") {
+      console.info(`[MAIL] Password reset link for ${username}: ${resetUrl}`);
+    } else {
+      console.warn("[MAIL] SMTP_HOST is not configured; password reset email was not sent.");
+    }
+    return;
+  }
+
+  const port = Number(process.env.SMTP_PORT || 587);
+  const secure = process.env.SMTP_SECURE === "true" || port === 465;
+  const user = process.env.SMTP_USER?.trim();
+  const pass = process.env.SMTP_PASSWORD || "";
+  const appHost = new URL(getPublicAppUrl()).hostname;
+
+  const transport = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    secure,
+    auth: user ? { user, pass } : undefined,
+    requireTLS: process.env.SMTP_REQUIRE_TLS === "true",
+  });
+
+  const from = process.env.SMTP_FROM || `CryptoToolbox <no-reply@${appHost}>`;
+  const safeUsername = escapeHtml(username);
+  const safeResetUrl = escapeHtml(resetUrl);
+  await transport.sendMail({
+    from,
+    to,
+    subject: "Restablece tu PIN de CryptoToolbox",
+    text: [
+      `Hola ${username},`,
+      "",
+      "Recibimos una solicitud para restablecer el PIN de tu cuenta en CryptoToolbox.",
+      `Abre este enlace para crear un PIN nuevo. Expira en ${RESET_TOKEN_TTL_MINUTES} minutos:`,
+      resetUrl,
+      "",
+      "Si no solicitaste este cambio, ignora este correo.",
+    ].join("\n"),
+    html: `
+      <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111">
+        <h2>Restablecer PIN de CryptoToolbox</h2>
+        <p>Hola ${safeUsername}, recibimos una solicitud para restablecer el PIN de tu cuenta.</p>
+        <p><a href="${safeResetUrl}" style="display:inline-block;background:#10b981;color:#000;padding:12px 18px;border-radius:8px;font-weight:700;text-decoration:none">Crear PIN nuevo</a></p>
+        <p>Este enlace expira en ${RESET_TOKEN_TTL_MINUTES} minutos.</p>
+        <p>Si no solicitaste este cambio, ignora este correo.</p>
+      </div>
+    `,
+  });
+}
+
 function signSession(userId: number): string {
   const payload: SessionPayload = {
     userId,
@@ -307,7 +436,8 @@ function clearSessionCookie(res: Response) {
 
 async function getPublicUserById(userId: number): Promise<PublicUser | null> {
   const result = await pool.query<PublicUser>(
-    `SELECT id, username, email, avatar_seed, role, points, rank, level, created_at
+    `SELECT id, username, email, first_name, last_name, birth_date, gender,
+            terms_accepted_at, avatar_seed, role, points, rank, level, created_at
      FROM users
      WHERE id = $1`,
     [userId],
@@ -335,12 +465,14 @@ async function requireAdmin(req: Request): Promise<PublicUser> {
 }
 
 function getAllowedOrigins(): Set<string> {
+  const localhostOrigins = isProduction && process.env.ALLOW_LOCALHOST_ORIGIN !== "true"
+    ? []
+    : [`http://localhost:${PORT}`, `https://localhost:${PORT}`];
   const configured = [
     process.env.APP_ORIGIN,
     process.env.APP_URL,
     ...(process.env.ALLOWED_ORIGINS || "").split(","),
-    `http://localhost:${PORT}`,
-    `https://localhost:${PORT}`,
+    ...localhostOrigins,
   ];
   return new Set(configured.map((value) => value?.trim()).filter(Boolean) as string[]);
 }
@@ -410,6 +542,11 @@ async function initializeDatabase() {
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
       email TEXT UNIQUE,
+      first_name TEXT,
+      last_name TEXT,
+      birth_date DATE,
+      gender TEXT,
+      terms_accepted_at TIMESTAMPTZ,
       pin TEXT NOT NULL,
       avatar_seed TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
@@ -455,6 +592,17 @@ async function initializeDatabase() {
       timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT UNIQUE NOT NULL,
+      requested_ip TEXT,
+      user_agent TEXT,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS wiki (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       name TEXT UNIQUE NOT NULL,
@@ -480,6 +628,16 @@ async function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_activities_timestamp ON activities (timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_direct_messages_pair ON direct_messages (sender_id, receiver_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets (user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets (expires_at);
+  `);
+
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_date DATE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
   `);
 
   await seedDefaultData();
@@ -575,14 +733,17 @@ async function seedDefaultData() {
       return;
     }
     await pool.query(
-      `INSERT INTO users (username, email, pin, avatar_seed, role, rank)
-       VALUES ($1, $2, $3, $4, 'admin', 'System Administrator')
+      `INSERT INTO users (username, email, first_name, last_name, pin, avatar_seed, role, rank, terms_accepted_at)
+       VALUES ($1, $2, 'System', 'Administrator', $3, $4, 'admin', 'System Administrator', now())
        ON CONFLICT (username) DO UPDATE
        SET email = EXCLUDED.email,
+           first_name = COALESCE(users.first_name, EXCLUDED.first_name),
+           last_name = COALESCE(users.last_name, EXCLUDED.last_name),
            pin = EXCLUDED.pin,
            role = 'admin',
            rank = 'System Administrator',
-           avatar_seed = EXCLUDED.avatar_seed`,
+           avatar_seed = EXCLUDED.avatar_seed,
+           terms_accepted_at = COALESCE(users.terms_accepted_at, EXCLUDED.terms_accepted_at)`,
       [adminUsername, adminEmail, hashPin(adminPin), adminUsername],
     );
     console.log("[DB] Administrator user provisioned from environment.");
@@ -662,7 +823,7 @@ async function startServer() {
   });
 
   app.get("/sitemap.xml", (_req, res) => {
-    const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+    const appUrl = getPublicAppUrl();
     res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${appUrl}/</loc></url></urlset>`);
   });
 
@@ -676,16 +837,101 @@ async function startServer() {
     res.json({ success: true });
   }));
 
+  app.post("/api/auth/forgot-password", asyncRoute(async (req, res) => {
+    const body = asObject(req.body);
+    const identifier = normalizeString(body.identifier, "usuario o correo", 254);
+    const genericMessage = "Si la cuenta existe y tiene correo, recibiras un enlace para restablecer el PIN.";
+
+    await pool.query("DELETE FROM password_resets WHERE expires_at < now() - interval '1 day' OR used_at < now() - interval '1 day'");
+
+    const userResult = await pool.query<{ id: number; username: string; email: string | null }>(
+      `SELECT id, username, email
+       FROM users
+       WHERE lower(username) = lower($1) OR email = lower($1)
+       ORDER BY id ASC
+       LIMIT 1`,
+      [identifier],
+    );
+    const user = userResult.rows[0];
+
+    if (user?.email) {
+      await pool.query(
+        `UPDATE password_resets
+         SET used_at = now()
+         WHERE user_id = $1 AND used_at IS NULL`,
+        [user.id],
+      );
+
+      const token = randomBytes(32).toString("base64url");
+      const tokenHash = hashResetToken(token);
+      const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MINUTES * 60 * 1000);
+      await pool.query(
+        `INSERT INTO password_resets (user_id, token_hash, requested_ip, user_agent, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [user.id, tokenHash, req.ip, req.get("user-agent")?.slice(0, 300) || null, expiresAt],
+      );
+
+      const resetUrl = new URL("/", getPublicAppUrl());
+      resetUrl.searchParams.set("reset_token", token);
+      void sendPasswordResetEmail(user.email, user.username, resetUrl.toString()).catch((error) => {
+        console.error("[MAIL] Password reset email failed:", error);
+      });
+    }
+
+    await delay(250);
+    res.json({ success: true, message: genericMessage });
+  }));
+
+  app.post("/api/auth/reset-password", asyncRoute(async (req, res) => {
+    const body = asObject(req.body);
+    const token = normalizeResetToken(body.token);
+    const pin = normalizePin(body.pin);
+    const tokenHash = hashResetToken(token);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const resetResult = await client.query<{ id: number; user_id: number; expires_at: Date; used_at: Date | null }>(
+        `SELECT id, user_id, expires_at, used_at
+         FROM password_resets
+         WHERE token_hash = $1
+         FOR UPDATE`,
+        [tokenHash],
+      );
+      const reset = resetResult.rows[0];
+      if (!reset || reset.used_at || new Date(reset.expires_at).getTime() < Date.now()) {
+        throw httpError(400, "El enlace de recuperacion no es valido o expiro");
+      }
+
+      await client.query("UPDATE users SET pin = $1 WHERE id = $2", [hashPin(pin), reset.user_id]);
+      await client.query("UPDATE password_resets SET used_at = now() WHERE id = $1", [reset.id]);
+      await client.query(
+        `UPDATE password_resets
+         SET used_at = COALESCE(used_at, now())
+         WHERE user_id = $1 AND id <> $2 AND used_at IS NULL`,
+        [reset.user_id, reset.id],
+      );
+      await client.query("COMMIT");
+      clearSessionCookie(res);
+      res.json({ success: true, message: "PIN actualizado correctamente. Ya puedes iniciar sesion." });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }));
+
   app.post("/api/auth/register", asyncRoute(async (req, res) => {
     const body = asObject(req.body);
     const username = normalizeUsername(body.username);
-    const email = normalizeOptionalEmail(body.email);
     const pin = normalizePin(body.pin);
     const avatarSeed = normalizeString(body.avatarSeed, "avatarSeed", 80, false) || username;
     const configuredAdminUsername = process.env.ADMIN_USERNAME?.trim();
 
     const existing = await pool.query<{ id: number; pin: string } & PublicUser>(
-      `SELECT id, username, email, pin, avatar_seed, role, points, rank, level, created_at
+      `SELECT id, username, email, first_name, last_name, birth_date, gender,
+              terms_accepted_at, pin, avatar_seed, role, points, rank, level, created_at
        FROM users
        WHERE username = $1`,
       [username],
@@ -706,11 +952,20 @@ async function startServer() {
       throw httpError(403, "El administrador debe crearse desde variables de entorno");
     }
 
+    const email = normalizeOptionalEmail(body.email);
+    if (!email) throw httpError(400, "email requerido");
+    const firstName = normalizePersonName(body.firstName, "firstName");
+    const lastName = normalizePersonName(body.lastName, "lastName");
+    const birthDate = normalizeBirthDate(body.birthDate);
+    const gender = normalizeGender(body.gender);
+    normalizeTermsAccepted(body.termsAccepted);
+
     const created = await pool.query<PublicUser>(
-      `INSERT INTO users (username, email, pin, avatar_seed, role, rank)
-       VALUES ($1, $2, $3, $4, 'user', 'Novice')
-       RETURNING id, username, email, avatar_seed, role, points, rank, level, created_at`,
-      [username, email, hashPin(pin), avatarSeed],
+      `INSERT INTO users (username, email, first_name, last_name, birth_date, gender, terms_accepted_at, pin, avatar_seed, role, rank)
+       VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8, 'user', 'Novice')
+       RETURNING id, username, email, first_name, last_name, birth_date, gender,
+                 terms_accepted_at, avatar_seed, role, points, rank, level, created_at`,
+      [username, email, firstName, lastName, birthDate, gender, hashPin(pin), avatarSeed],
     );
     setSessionCookie(req, res, created.rows[0].id);
     res.status(201).json({ success: true, user: created.rows[0] });
@@ -756,7 +1011,8 @@ async function startServer() {
     res.json({ success: true });
   }));
 
-  app.get("/api/apps", asyncRoute(async (_req, res) => {
+  app.get("/api/apps", asyncRoute(async (req, res) => {
+    await requireSession(req);
     const apps = await pool.query("SELECT id, key, name, description, image, md5, sha1, sha256 FROM apps ORDER BY id ASC");
     res.json(apps.rows);
   }));
@@ -884,13 +1140,37 @@ async function startServer() {
       }
     }
 
+    const geminiKey = process.env.GEMINI_API_KEY?.trim();
+    if (geminiKey && geminiKey !== "MY_GEMINI_API_KEY") {
+      try {
+        const ai = new GoogleGenAI({ apiKey: geminiKey });
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: `Analiza el siguiente hash: ${hashLower}.
+Busca si existe un valor original conocido en bases publicas de hashes.
+Si encuentras el valor, responde unicamente con el texto original, sin explicaciones ni formato.
+Si no lo encuentras, responde exactamente: NOT_FOUND`,
+          config: {
+            tools: [{ googleSearch: {} }],
+            temperature: 0.1,
+          },
+        });
+        const text = response.text?.trim();
+        if (text && text !== "NOT_FOUND" && !/not[_\s-]?found/i.test(text) && text.length <= 100 && !UNSAFE_TEXT_RE.test(text)) {
+          return res.json({ found: true, value: text, source: "AI" });
+        }
+      } catch (error) {
+        console.error("[DECODE] AI lookup failed:", error);
+      }
+    }
+
     res.json({ found: false });
   }));
 
   app.get("/api/users", asyncRoute(async (req, res) => {
     await requireSession(req);
     const rows = await pool.query(
-      `SELECT id, username, avatar_seed, role, points, rank, level, created_at
+      `SELECT id, username, first_name, last_name, avatar_seed, role, points, rank, level, created_at
        FROM users
        ORDER BY username ASC`,
     );
