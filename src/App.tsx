@@ -129,7 +129,105 @@ interface NotificationPrefs {
   verificationMatch: boolean;
 }
 
+const ASSIGNMENT_EXECUTABLES = [
+  'https://the.earth.li/~sgtatham/putty/latest/w64/plink.exe',
+  'https://the.earth.li/~sgtatham/putty/latest/w64/putty.exe',
+  'https://download.virtualbox.org/virtualbox/7.0.8/VirtualBox-7.0.8-156879-Win.exe'
+];
+
 const AVATARS = ['👤', '🐱', '🐶', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧', '🐦', '🐤', '🦆', '🦅', '🦉', '🦇', '🐺', '🐗', '🐴', '🦄', '🐝', '🐛', '🦋', '🐌', '🐞', '🐜', '🦟', '🦗', '🕷', '🕸', '🦂', '🐢', '🐍', '🦎', '🦖', '🦕', '🐙', '🦑', '🦐', '🦞', '🦀', '🐡', '🐠', '🐟', '🐬', '🐳', '🐋', '🦈', '🐊', '🐅', '🐆', '🦓', '🦍', '🦧', '🐘', '🦛', '🦏', '🐪', '🐫', '🦒', '🦘', '🐃', '🐂', '🐄', '🐎', '🐖', '🐏', '🐑', '🐐', '🦌', '🐕', '🐩', '🐈', '🐓', '🦃', '🦚', '🦜', '🦢', '🦩', '🕊', '🐇', '🦝', '🦨', '🦡', '🦦', '🦥', '🐁', '🐀', '🐿', '🦔'];
+
+const AssignmentBriefPopup = ({ isOpen, onClose, isDarkMode }: { isOpen: boolean, onClose: () => void, isDarkMode: boolean }) => (
+  <AnimatePresence>
+    {isOpen && (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="absolute inset-0 bg-black/70 backdrop-blur-md"
+          onClick={onClose}
+        />
+        <motion.div
+          initial={{ opacity: 0, y: 24, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 16, scale: 0.96 }}
+          transition={{ duration: 0.22 }}
+          className={`relative w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-3xl border shadow-2xl ${isDarkMode ? 'bg-[#080808] border-white/10 text-white' : 'bg-white border-black/10 text-gray-950'}`}
+        >
+          <button
+            onClick={onClose}
+            className={`absolute right-4 top-4 p-2 rounded-xl transition-colors ${isDarkMode ? 'hover:bg-white/10 text-white/70' : 'hover:bg-black/5 text-gray-500'}`}
+            aria-label="Cerrar mandato"
+          >
+            <X className="w-5 h-5" />
+          </button>
+
+          <div className="p-6 sm:p-8 space-y-7">
+            <div className="flex flex-col sm:flex-row sm:items-start gap-5 pr-10">
+              <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-7 h-7 text-emerald-500" />
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-emerald-500">Certificados Digitales</p>
+                <h2 className="text-2xl sm:text-4xl font-black tracking-tight">Mandato del trabajo</h2>
+                <p className={`text-sm sm:text-base leading-relaxed ${isDarkMode ? 'text-white/65' : 'text-gray-600'}`}>
+                  Esta plataforma documenta y demuestra la practica: obtener hashes de ejecutables, publicarlos en una pagina web y validar el acceso HTTPS con certificado SSL publico.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid lg:grid-cols-[1.1fr_0.9fr] gap-5">
+              <div className={`rounded-2xl border p-5 space-y-4 ${isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-black/10 bg-gray-50'}`}>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-blue-500/10">
+                    <FileSearch className="w-5 h-5 text-blue-500" />
+                  </div>
+                  <h3 className="font-black uppercase tracking-widest text-xs">1. Buscar llaves hash</h3>
+                </div>
+                <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-white/65' : 'text-gray-600'}`}>
+                  Buscar la llave md5, sha1sum y sha256sum de los siguientes ejecutables:
+                </p>
+                <div className="space-y-2">
+                  {ASSIGNMENT_EXECUTABLES.map((url) => (
+                    <div key={url} className={`p-3 rounded-xl border font-mono text-[11px] break-all ${isDarkMode ? 'border-white/10 bg-black/30 text-white/75' : 'border-black/10 bg-white text-gray-700'}`}>
+                      {url}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className={`rounded-2xl border p-5 space-y-4 ${isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-black/10 bg-gray-50'}`}>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-emerald-500/10">
+                    <Globe className="w-5 h-5 text-emerald-500" />
+                  </div>
+                  <h3 className="font-black uppercase tracking-widest text-xs">2. Publicar con SSL</h3>
+                </div>
+                <ul className={`space-y-3 text-sm leading-relaxed ${isDarkMode ? 'text-white/65' : 'text-gray-600'}`}>
+                  <li>Crear una pagina HTML, JS y CSS con tres botones para mostrar los hashes por aplicacion.</li>
+                  <li>Crear una VM en DigitalOcean y publicar la pagina en Apache o NGINX.</li>
+                  <li>Crear un dominio gratuito en DuckDNS y apuntar el Record A a la IP publica.</li>
+                  <li>Generar e instalar un certificado gratuito Let's Encrypt con Certbot.</li>
+                  <li>Validar acceso publico sin errores SSL y certificado creado en la semana asignada.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={onClose}
+                className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-black uppercase tracking-widest transition-colors shadow-lg shadow-emerald-600/20"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    )}
+  </AnimatePresence>
+);
 
 const ProfileSelector = ({ onSelect, onBackToQuiz, isDarkMode }: { onSelect: (profile: UserProfile) => void, onBackToQuiz: () => void, isDarkMode: boolean }) => {
   const [username, setUsername] = useState('');
@@ -1513,6 +1611,7 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [currentThemeId, setCurrentThemeId] = useState('dark');
+  const [showAssignmentPopup, setShowAssignmentPopup] = useState(false);
   const [notificationPrefs, setNotificationPrefs] = useState<NotificationPrefs>({
     newActivity: true,
     rareHash: true,
@@ -1528,6 +1627,11 @@ export default function App() {
     const method = localStorage.getItem('crypto_toolbox_entry_method') as 'quiz' | 'skip' | null;
     const savedTheme = localStorage.getItem('crypto_toolbox_theme');
     const savedPrefs = localStorage.getItem('crypto_toolbox_notifications');
+    const assignmentPopupSeen = localStorage.getItem('crypto_toolbox_assignment_popup_seen');
+
+    if (assignmentPopupSeen !== 'true') {
+      setShowAssignmentPopup(true);
+    }
 
     if (savedTheme) {
       setCurrentThemeId(savedTheme);
@@ -1607,11 +1711,21 @@ export default function App() {
     localStorage.setItem('crypto_toolbox_notifications', JSON.stringify(prefs));
   };
 
+  const handleCloseAssignmentPopup = () => {
+    localStorage.setItem('crypto_toolbox_assignment_popup_seen', 'true');
+    setShowAssignmentPopup(false);
+  };
+
   if (hasPassedQuiz === null) return null;
 
   return (
     <div className={isDarkMode ? 'dark' : ''} style={{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', minHeight: '100vh' }}>
       <Toaster position="top-right" theme={isDarkMode ? 'dark' : 'light'} />
+      <AssignmentBriefPopup
+        isOpen={showAssignmentPopup}
+        onClose={handleCloseAssignmentPopup}
+        isDarkMode={isDarkMode}
+      />
       {!hasPassedQuiz ? (
         <MusicGate 
           onPass={handleQuizPass} 

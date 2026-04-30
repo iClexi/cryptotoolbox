@@ -1,57 +1,54 @@
 # CryptoToolbox
 
-Vite/React frontend with an Express + Socket.IO backend. Persistence now uses PostgreSQL only.
+CryptoToolbox is an academic web app for validating executable integrity with MD5, SHA-1, and SHA-256 hashes. It turns a certificate and checksum assignment into a polished interactive experience with verification tools, hash generation, file analysis, activity history, chat, and an algorithm wiki.
 
-## Local Setup
+## Project Context
 
-1. Install dependencies:
-   `npm install`
-2. Copy `.env.example` to `.env` and set real values for `SESSION_SECRET`, PostgreSQL credentials, `APP_URL`, `APP_ORIGIN`, and the optional admin PIN.
-3. Start PostgreSQL and create the `cryptotoolbox` database.
-4. Run the app:
-   `npm run dev`
+This project was built for the **Certificados Digitales** assignment. The core task was to publish a secure HTTPS web page where users can select one of three executables and view its MD5, SHA-1, and SHA-256 values:
 
-The server creates the required tables and default app/wiki rows on startup.
+- `plink.exe`
+- `putty.exe`
+- `VirtualBox-7.0.8-156879-Win.exe`
 
-## Server Deployment
+The assignment also required a public domain, SSL certificate validation with Let's Encrypt, and internet access without browser SSL warnings.
 
-Do not commit the real `.env` file. It contains production secrets and is intentionally ignored by Git.
+## What You Can Explore
 
-On the server:
+- Integrity verification for PuTTY, Plink, and VirtualBox.
+- MD5, SHA-1, and SHA-256 hash generation.
+- File hashing directly in the browser.
+- Online/local hash decoding helpers.
+- Algorithm wiki with security notes.
+- User profiles, reputation, global chat, private messages, and activity feed.
+- Hardened Express API using PostgreSQL, signed sessions, HttpOnly cookies, CSP, and stricter input validation.
 
-```bash
-npm ci
-npm run build
-NODE_ENV=production npm run start
-```
+## Tech Stack
 
-Recommended production settings:
+- React 19
+- Vite
+- TypeScript
+- Express
+- Socket.IO
+- PostgreSQL
+- Tailwind CSS
+- Lucide Icons
 
-```env
-NODE_ENV=production
-APP_URL=https://your-domain.com
-APP_ORIGIN=https://your-domain.com
-ALLOWED_ORIGINS=https://your-domain.com
-FORCE_HTTPS=true
-COOKIE_SECURE=true
-SESSION_SECRET=use-a-long-random-secret
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_NAME=cryptotoolbox
-DB_USER=cryptotoolbox_user
-DB_PASSWORD=use-a-strong-password
-DB_SSL=false
-```
-
-Run the Node process behind Nginx, Caddy, Apache, or another reverse proxy that terminates HTTPS and forwards traffic to port `3000`.
-
-## Security Scan Notes
-
-For ZAP, scan a production build instead of Vite dev middleware:
+## Source Setup
 
 ```bash
-npm run build
-$env:NODE_ENV="production"; npm run start
+npm install
+cp .env.example .env
+npm run dev
 ```
 
-Use HTTPS in deployment with `FORCE_HTTPS=true`, `COOKIE_SECURE=true`, and a reverse proxy or TLS terminator.
+The real `.env` file is intentionally ignored by Git because it must contain private values such as `SESSION_SECRET`, PostgreSQL credentials, admin PINs, and API keys. The committed `.env.example` is only a safe template for developers reading or running the source code.
+
+## Verification
+
+```bash
+npm run lint
+npm run build
+npm audit
+```
+
+The repository does not include local databases, build output, logs, or secret environment files.
