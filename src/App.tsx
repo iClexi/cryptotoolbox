@@ -2103,13 +2103,20 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
   const [events, setEvents] = useState<VisitorEvent[]>([]);
   const [summary, setSummary] = useState<any>({});
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [lastEventId, setLastEventId] = useState<number | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const hasLoadedRef = useRef(false);
 
-  useAnimeEntrance(panelRef, events.length);
+  useAnimeEntrance(panelRef, 'admin-traffic');
 
   const fetchTraffic = useCallback(async () => {
-    setLoading(true);
+    if (hasLoadedRef.current) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError('');
     try {
       const response = await fetch('/api/admin/traffic?limit=150');
@@ -2117,10 +2124,12 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
       if (!response.ok) throw new Error(data.error || 'No se pudo cargar el trafico');
       setEvents(data.events || []);
       setSummary(data.summary || {});
+      hasLoadedRef.current = true;
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -2131,7 +2140,11 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
   useEffect(() => {
     if (!socket) return;
     const handleVisitorEvent = (event: VisitorEvent) => {
-      setEvents((current) => [event, ...current.filter((item) => item.id !== event.id)].slice(0, 150));
+      setLastEventId(event.id);
+      setEvents((current) => {
+        const withoutDuplicate = current.filter((item) => item.id !== event.id);
+        return [event, ...withoutDuplicate].slice(0, 150);
+      });
     };
     socket.on('visitor_event', handleVisitorEvent);
     return () => {
@@ -2146,15 +2159,26 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
     return 'Sin geolocalizacion';
   };
 
+  const visibleSummary = useMemo(() => {
+    const uniqueIps = new Set(events.map((event) => event.ip).filter(Boolean));
+    const authenticatedEvents = events.filter((event) => event.authenticated).length;
+    return {
+      total_events: Math.max(Number(summary.total_events || 0), events.length),
+      unique_ips: Math.max(Number(summary.unique_ips || 0), uniqueIps.size),
+      authenticated_events: Math.max(Number(summary.authenticated_events || 0), authenticatedEvents),
+      anonymous_events: Math.max(Number(summary.anonymous_events || 0), events.length - authenticatedEvents),
+    };
+  }, [events, summary]);
+
   const statCards = [
-    { label: 'Eventos 24h', value: summary.total_events || events.length || 0, icon: Globe, color: '#06b6d4' },
-    { label: 'IPs unicas', value: summary.unique_ips || 0, icon: Fingerprint, color: '#10b981' },
-    { label: 'Autenticados', value: summary.authenticated_events || 0, icon: ShieldCheck, color: '#8b5cf6' },
-    { label: 'Anonimos', value: summary.anonymous_events || 0, icon: Users, color: '#f59e0b' },
+    { label: 'Eventos 24h', value: visibleSummary.total_events, icon: Globe, color: '#06b6d4' },
+    { label: 'IPs unicas', value: visibleSummary.unique_ips, icon: Fingerprint, color: '#10b981' },
+    { label: 'Autenticados', value: visibleSummary.authenticated_events, icon: ShieldCheck, color: '#8b5cf6' },
+    { label: 'Anonimos', value: visibleSummary.anonymous_events, icon: Users, color: '#f59e0b' },
   ];
 
   return (
-    <div ref={panelRef} className="space-y-6">
+    <div ref={panelRef} className="space-y-6 admin-traffic-panel">
       <div data-anime="fade-up" className="rounded-3xl border p-6 sm:p-8 overflow-hidden relative" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
         <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-emerald-500 via-cyan-500 to-violet-500" />
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-5">
@@ -2163,15 +2187,16 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
             <h2 className="text-3xl font-black tracking-tight mt-2">Trafico en tiempo real</h2>
             <p className="text-sm opacity-60 mt-2 max-w-2xl">Registra visitas anonimas y autenticadas, IP publica o privada, navegador, sistema, idioma, pantalla, zona horaria y pais cuando Cloudflare entrega esos headers.</p>
           </div>
-          <button onClick={fetchTraffic} className="px-4 py-3 rounded-xl text-xs font-black border transition-all hover:scale-[1.02]" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-color)' }}>
-            Actualizar
+          <button onClick={fetchTraffic} disabled={refreshing} className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-black border transition-all hover:scale-[1.02] disabled:opacity-55 disabled:hover:scale-100" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-color)' }}>
+            <RotateCcw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Actualizando' : 'Actualizar'}
           </button>
         </div>
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {statCards.map((stat) => (
-          <div data-anime="fade-up" key={stat.label} className="rounded-2xl border p-5" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
+          <div data-anime="fade-up" key={stat.label} className="rounded-2xl border p-5 transition-colors" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
             <div className="flex items-center justify-between">
               <stat.icon className="w-5 h-5" style={{ color: stat.color }} />
               <span className="text-2xl font-black">{stat.value}</span>
@@ -2186,52 +2211,69 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
         <div className="rounded-3xl border p-8 text-center opacity-60" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>Cargando trafico...</div>
       ) : (
         <div data-anime="fade-up" className="rounded-3xl border overflow-hidden" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead style={{ backgroundColor: 'var(--bg-color)' }}>
-                <tr className="uppercase tracking-widest opacity-55">
-                  <th className="p-4">Hora</th>
-                  <th className="p-4">Usuario</th>
-                  <th className="p-4">IP / ubicacion</th>
-                  <th className="p-4">Navegador</th>
-                  <th className="p-4">Pantalla</th>
-                  <th className="p-4">Ruta</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((event) => (
-                  <tr key={event.id} className="border-t align-top" style={{ borderColor: 'var(--border-color)' }}>
-                    <td className="p-4 whitespace-nowrap font-mono opacity-65">{new Date(event.created_at).toLocaleTimeString()}</td>
-                    <td className="p-4">
-                      <div className="font-bold">{event.username || 'Anonimo'}</div>
-                      <div className="opacity-45">{event.event_type} · {event.authenticated ? 'auth' : 'publico'}</div>
-                    </td>
-                    <td className="p-4">
-                      <div className="font-mono">{event.ip}</div>
-                      <div className="opacity-45">{formatLocation(event)}</div>
-                    </td>
-                    <td className="p-4 min-w-[220px]">
-                      <div className="font-bold">{event.browser_name} / {event.os_name}</div>
-                      <div className="opacity-45">{event.platform || event.device_type} · {event.browser_language || event.accept_language || 'sin idioma'}</div>
-                      <div className="opacity-35 truncate max-w-xs">{event.user_agent || 'sin user-agent'}</div>
-                    </td>
-                    <td className="p-4 whitespace-nowrap">
-                      <div>{event.viewport || 'viewport ?'}</div>
-                      <div className="opacity-45">{event.screen || 'screen ?'} · {event.browser_timezone || event.timezone || 'tz ?'}</div>
-                    </td>
-                    <td className="p-4">
-                      <div className="font-mono break-all">{event.method || 'GET'} {event.path || '/'}</div>
-                      <div className="opacity-45">HTTP {event.status_code || '?'}</div>
-                    </td>
-                  </tr>
-                ))}
-                {events.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="p-10 text-center opacity-45">Todavia no hay eventos registrados.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-color)' }}>
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-45">Eventos recientes</p>
+              <p className="text-sm font-bold truncate">{events.length} registros visibles sin recargar la vista</p>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-emerald-400" style={{ borderColor: 'rgba(16,185,129,0.28)', backgroundColor: 'rgba(16,185,129,0.08)' }}>
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              En vivo
+            </div>
+          </div>
+
+          <div className="max-h-[720px] overflow-y-auto p-3 sm:p-4 space-y-3 custom-scrollbar" data-smooth-scroll>
+            {events.map((event) => (
+              <article key={event.id} className={`admin-traffic-card rounded-2xl border p-4 transition-colors duration-300 ${event.id === lastEventId ? 'ring-1 ring-emerald-400/50 bg-emerald-500/5' : 'bg-black/5'}`} style={{ borderColor: 'var(--border-color)' }}>
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.9fr)_minmax(0,1.25fr)]">
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-lg bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-400">{event.authenticated ? 'Auth' : 'Publico'}</span>
+                      <span className="font-mono text-[11px] opacity-55">{new Date(event.created_at).toLocaleString()}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black">{event.username || 'Anonimo'}</p>
+                      <p className="truncate text-xs opacity-45">{event.event_type || 'evento'} · HTTP {event.status_code || '?'}</p>
+                    </div>
+                  </div>
+
+                  <div className="min-w-0 rounded-xl border p-3" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-color)' }}>
+                    <p className="text-[10px] font-black uppercase tracking-widest opacity-45">IP / ubicacion</p>
+                    <p className="mt-2 break-all font-mono text-sm">{event.ip || 'sin-ip'}</p>
+                    <p className="mt-1 break-words text-xs opacity-55">{formatLocation(event)}</p>
+                  </div>
+
+                  <div className="min-w-0 rounded-xl border p-3" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-color)' }}>
+                    <p className="text-[10px] font-black uppercase tracking-widest opacity-45">Navegador</p>
+                    <p className="mt-2 truncate text-sm font-bold">{event.browser_name || 'Desconocido'} / {event.os_name || 'OS ?'}</p>
+                    <p className="truncate text-xs opacity-45">{event.platform || event.device_type || 'dispositivo ?'} · {event.browser_language || event.accept_language || 'sin idioma'}</p>
+                    <p className="mt-2 max-h-12 overflow-y-auto rounded-lg bg-black/20 p-2 font-mono text-[10px] leading-relaxed opacity-45 custom-scrollbar break-all">
+                      {event.user_agent || 'sin user-agent'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 border-t pt-3 md:grid-cols-[minmax(0,1fr)_minmax(190px,0.38fr)]" style={{ borderColor: 'var(--border-color)' }}>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-widest opacity-45">Ruta</p>
+                    <code className="mt-1 block max-w-full overflow-x-auto rounded-lg bg-black/20 px-3 py-2 font-mono text-[11px] custom-scrollbar whitespace-nowrap">
+                      {event.method || 'GET'} {event.path || '/'}
+                    </code>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-widest opacity-45">Pantalla / zona</p>
+                    <p className="mt-1 truncate text-xs font-bold">{event.viewport || 'viewport ?'} · {event.screen || 'screen ?'}</p>
+                    <p className="truncate text-xs opacity-45">{event.browser_timezone || event.timezone || 'tz ?'}</p>
+                  </div>
+                </div>
+              </article>
+            ))}
+
+            {events.length === 0 && (
+              <div className="rounded-2xl border p-10 text-center opacity-45" style={{ borderColor: 'var(--border-color)' }}>
+                Todavia no hay eventos registrados.
+              </div>
+            )}
           </div>
         </div>
       )}

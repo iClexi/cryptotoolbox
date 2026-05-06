@@ -1,17 +1,41 @@
 @import "tailwindcss";
 
 @media (prefers-reduced-motion: no-preference) {
-  html {
+  html,
+  body,
+  #root,
+  .custom-scrollbar,
+  [data-smooth-scroll] {
     scroll-behavior: smooth;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  body,
+  #root,
+  .custom-scrollbar,
+  [data-smooth-scroll] {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  overflow-x: hidden;
 }
 
 [id] {
   scroll-margin-top: 80px;
 }
 
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(16, 185, 129, 0.35) transparent;
+}
+
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
@@ -22,4 +46,9 @@
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(16, 185, 129, 0.4);
+}
+
+.admin-traffic-card {
+  contain: layout paint;
+  overflow-wrap: anywhere;
 }
