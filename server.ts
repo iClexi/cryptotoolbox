@@ -32,6 +32,9 @@ const AUTH_RATE_LIMIT = Number(process.env.AUTH_RATE_LIMIT || 20);
 const PASSWORD_RESET_RATE_LIMIT = Number(process.env.PASSWORD_RESET_RATE_LIMIT || 5);
 const ACCOUNT_LOCK_ATTEMPTS = Number(process.env.ACCOUNT_LOCK_ATTEMPTS || 5);
 const ACCOUNT_LOCK_MINUTES = Number(process.env.ACCOUNT_LOCK_MINUTES || 15);
+const MIN_USER_AGE = 13;
+const MAX_USER_AGE = 150;
+const VISITOR_EVENT_RETENTION_DAYS = Number(process.env.VISITOR_EVENT_RETENTION_DAYS || 45);
 
 const configuredSessionSecret = process.env.SESSION_SECRET?.trim();
 const sessionSecret = configuredSessionSecret || (isProduction ? "" : randomBytes(32).toString("hex"));
@@ -84,6 +87,48 @@ type LoginUserRow = PublicUser & {
 type RateLimitEntry = {
   count: number;
   resetAt: number;
+};
+
+type BrowserTelemetry = {
+  browser_language?: string | null;
+  browser_timezone?: string | null;
+  platform?: string | null;
+  screen?: string | null;
+  viewport?: string | null;
+  connection_type?: string | null;
+  browser_data?: Record<string, unknown>;
+};
+
+type VisitorEventRow = {
+  id: number;
+  event_type: string;
+  user_id: number | null;
+  username: string | null;
+  authenticated: boolean;
+  ip: string;
+  method: string | null;
+  path: string | null;
+  status_code: number | null;
+  user_agent: string | null;
+  browser_name: string | null;
+  os_name: string | null;
+  device_type: string | null;
+  accept_language: string | null;
+  browser_language: string | null;
+  platform: string | null;
+  screen: string | null;
+  viewport: string | null;
+  timezone: string | null;
+  browser_timezone: string | null;
+  connection_type: string | null;
+  referrer: string | null;
+  origin: string | null;
+  cf_country: string | null;
+  cf_region: string | null;
+  cf_city: string | null;
+  cf_timezone: string | null;
+  browser_data: Record<string, unknown> | null;
+  created_at: string | Date;
 };
 
 const rateLimitMap = new Map<string, RateLimitEntry>();
@@ -211,6 +256,14 @@ function normalizeBirthDate(value: unknown): string {
   if (year < 1900 || parsed > today) {
     throw httpError(400, "fecha de nacimiento fuera de rango");
   }
+  let age = today.getUTCFullYear() - parsed.getUTCFullYear();
+  const monthDelta = today.getUTCMonth() - parsed.getUTCMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && today.getUTCDate() < parsed.getUTCDate())) {
+    age -= 1;
+  }
+  if (age < MIN_USER_AGE || age > MAX_USER_AGE) {
+    throw httpError(400, `debes tener entre ${MIN_USER_AGE} y ${MAX_USER_AGE} anos`);
+  }
 
   return birthDate;
 }
@@ -234,6 +287,90 @@ function getClientIp(req: Request): string {
     return forwarded.split(",")[0].trim().slice(0, 100);
   }
   return (req.ip || req.socket.remoteAddress || "unknown").slice(0, 100);
+}
+
+function cleanTelemetryText(value: unknown, maxLength: number): string | null {
+  if (value === undefined || value === null) return null;
+  const text = String(value).replace(/\u0000/g, "").replace(/[<>]/g, "").trim();
+  return text ? text.slice(0, maxLength) : null;
+}
+
+function getHeaderText(req: Request, name: string, maxLength = 300): string | null {
+  const value = req.headers[name.toLowerCase()];
+  if (Array.isArray(value)) return cleanTelemetryText(value.join(", "), maxLength);
+  return cleanTelemetryText(value, maxLength);
+}
+
+function isPrivateIp(ip: string): boolean {
+  return /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|::1|fe80:|fc|fd)/i.test(ip);
+}
+
+function parseUserAgent(userAgent: string | null) {
+  const ua = userAgent || "";
+  const browserName = /Edg\//.test(ua) ? "Microsoft Edge"
+    : /OPR\//.test(ua) ? "Opera"
+    : /Chrome\//.test(ua) ? "Chrome"
+    : /Firefox\//.test(ua) ? "Firefox"
+    : /Safari\//.test(ua) ? "Safari"
+    : /curl\//i.test(ua) ? "curl"
+    : ua ? "Otro" : "Desconocido";
+  const osName = /Windows NT/i.test(ua) ? "Windows"
+    : /Android/i.test(ua) ? "Android"
+    : /iPhone|iPad|iPod/i.test(ua) ? "iOS"
+    : /Mac OS X/i.test(ua) ? "macOS"
+    : /Linux/i.test(ua) ? "Linux"
+    : ua ? "Otro" : "Desconocido";
+  const deviceType = /Mobi|Android|iPhone/i.test(ua) ? "mobile"
+    : /iPad|Tablet/i.test(ua) ? "tablet"
+    : "desktop";
+  return { browserName, osName, deviceType };
+}
+
+function safeRequestPath(req: Request, override?: unknown): string {
+  const rawPath = cleanTelemetryText(override, 300) || req.originalUrl || req.path || "/";
+  try {
+    return new URL(rawPath, "http://local").pathname.slice(0, 300);
+  } catch {
+    return rawPath.split("?")[0].slice(0, 300);
+  }
+}
+
+function normalizeBrowserTelemetry(body: Record<string, unknown>): BrowserTelemetry {
+  const browserData: Record<string, unknown> = {};
+  const allowedKeys = [
+    "language",
+    "languages",
+    "timezone",
+    "platform",
+    "userAgent",
+    "screen",
+    "viewport",
+    "hardwareConcurrency",
+    "deviceMemory",
+    "connection",
+    "touchPoints",
+  ];
+
+  for (const key of allowedKeys) {
+    const value = body[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value === "object") {
+      const serialized = JSON.stringify(value);
+      browserData[key] = serialized ? serialized.slice(0, 1000) : null;
+    } else {
+      browserData[key] = cleanTelemetryText(value, 1000);
+    }
+  }
+
+  return {
+    browser_language: cleanTelemetryText(body.language, 120),
+    browser_timezone: cleanTelemetryText(body.timezone, 120),
+    platform: cleanTelemetryText(body.platform, 160),
+    screen: cleanTelemetryText(body.screen, 80),
+    viewport: cleanTelemetryText(body.viewport, 80),
+    connection_type: cleanTelemetryText(body.connection, 120),
+    browser_data: Object.keys(browserData).length ? browserData : undefined,
+  };
 }
 
 function enforceRateLimit(key: string, limit: number, windowMs: number) {
@@ -695,11 +832,46 @@ async function initializeDatabase() {
       sha256 TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS visitor_events (
+      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      username TEXT,
+      authenticated BOOLEAN NOT NULL DEFAULT false,
+      ip TEXT NOT NULL,
+      method TEXT,
+      path TEXT,
+      status_code INTEGER,
+      user_agent TEXT,
+      browser_name TEXT,
+      os_name TEXT,
+      device_type TEXT,
+      accept_language TEXT,
+      browser_language TEXT,
+      platform TEXT,
+      screen TEXT,
+      viewport TEXT,
+      timezone TEXT,
+      browser_timezone TEXT,
+      connection_type TEXT,
+      referrer TEXT,
+      origin TEXT,
+      cf_country TEXT,
+      cf_region TEXT,
+      cf_city TEXT,
+      cf_timezone TEXT,
+      browser_data JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_activities_timestamp ON activities (timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_direct_messages_pair ON direct_messages (sender_id, receiver_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets (user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets (expires_at);
+    CREATE INDEX IF NOT EXISTS idx_visitor_events_created_at ON visitor_events (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_visitor_events_user ON visitor_events (user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_visitor_events_ip ON visitor_events (ip, created_at DESC);
   `);
 
   await pool.query(`
@@ -890,9 +1062,94 @@ function mapRows<T extends QueryResultRow>(result: { rows: T[] }) {
   return result.rows;
 }
 
+function shouldTrackRequest(req: Request): boolean {
+  const pathName = safeRequestPath(req);
+  if (pathName.startsWith("/socket.io")) return false;
+  if (pathName.startsWith("/assets/") || pathName.startsWith("/logo.png") || pathName.startsWith("/favicon")) return false;
+  if (pathName === "/api/telemetry/visit" || pathName.startsWith("/api/admin/traffic")) return false;
+  if (pathName === "/robots.txt" || pathName === "/sitemap.xml") return false;
+  return req.method === "GET" || req.method === "POST";
+}
+
+async function insertVisitorEvent(
+  req: Request,
+  options: {
+    eventType: string;
+    user?: PublicUser | null;
+    statusCode?: number | null;
+    path?: unknown;
+    browser?: BrowserTelemetry;
+  },
+): Promise<VisitorEventRow> {
+  const userAgent = getHeaderText(req, "user-agent", 600);
+  const parsedAgent = parseUserAgent(userAgent);
+  const ip = getClientIp(req);
+  const browser = options.browser || {};
+  const country = getHeaderText(req, "cf-ipcountry", 80);
+  const region = getHeaderText(req, "cf-region", 120) || getHeaderText(req, "cf-region-code", 120);
+  const city = getHeaderText(req, "cf-ipcity", 120);
+  const cfTimezone = getHeaderText(req, "cf-timezone", 120);
+  const result = await pool.query<VisitorEventRow>(
+    `INSERT INTO visitor_events (
+       event_type, user_id, username, authenticated, ip, method, path, status_code,
+       user_agent, browser_name, os_name, device_type, accept_language,
+       browser_language, platform, screen, viewport, timezone, browser_timezone,
+       connection_type, referrer, origin, cf_country, cf_region, cf_city,
+       cf_timezone, browser_data
+     )
+     VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8,
+       $9, $10, $11, $12, $13,
+       $14, $15, $16, $17, $18, $19,
+       $20, $21, $22, $23, $24, $25,
+       $26, $27
+     )
+     RETURNING *`,
+    [
+      options.eventType,
+      options.user?.id || null,
+      options.user?.username || null,
+      Boolean(options.user),
+      ip,
+      req.method,
+      safeRequestPath(req, options.path),
+      options.statusCode || null,
+      userAgent,
+      parsedAgent.browserName,
+      parsedAgent.osName,
+      parsedAgent.deviceType,
+      getHeaderText(req, "accept-language", 300),
+      browser.browser_language || null,
+      browser.platform || null,
+      browser.screen || null,
+      browser.viewport || null,
+      cfTimezone || (isPrivateIp(ip) ? "LAN/Privada" : null),
+      browser.browser_timezone || null,
+      browser.connection_type || null,
+      getHeaderText(req, "referer", 600),
+      getHeaderText(req, "origin", 300),
+      country || (isPrivateIp(ip) ? "LAN" : null),
+      region,
+      city,
+      cfTimezone,
+      browser.browser_data || null,
+    ],
+  );
+  return result.rows[0];
+}
+
+async function pruneVisitorEvents() {
+  if (!Number.isFinite(VISITOR_EVENT_RETENTION_DAYS) || VISITOR_EVENT_RETENTION_DAYS < 1) return;
+  await pool.query(
+    "DELETE FROM visitor_events WHERE created_at < now() - ($1 || ' days')::interval",
+    [Math.min(365, VISITOR_EVENT_RETENTION_DAYS)],
+  );
+}
+
 async function startServer() {
   await waitForDatabase();
   await initializeDatabase();
+  await pruneVisitorEvents();
 
   const app = express();
   const httpServer = createServer(app);
@@ -911,9 +1168,41 @@ async function startServer() {
   configureSecurity(app);
   app.use(express.json({ limit: "100kb" }));
 
+  app.use((req, res, next) => {
+    if (!shouldTrackRequest(req)) return next();
+    res.on("finish", () => {
+      void (async () => {
+        const user = await getSessionUserFromCookie(req.headers.cookie).catch(() => null);
+        const row = await insertVisitorEvent(req, {
+          eventType: req.path.startsWith("/api/") ? "api" : "page",
+          user,
+          statusCode: res.statusCode,
+        });
+        io.to("admins").emit("visitor_event", row);
+      })().catch((error) => {
+        console.error("[TELEMETRY] Request tracking failed:", error);
+      });
+    });
+    return next();
+  });
+
   app.get("/api/health", asyncRoute(async (_req, res) => {
     await pool.query("SELECT 1");
     res.json({ ok: true, database: "postgresql" });
+  }));
+
+  app.post("/api/telemetry/visit", asyncRoute(async (req, res) => {
+    const body = asObject(req.body);
+    const user = await getSessionUserFromCookie(req.headers.cookie).catch(() => null);
+    const row = await insertVisitorEvent(req, {
+      eventType: "browser",
+      user,
+      statusCode: 204,
+      path: body.path,
+      browser: normalizeBrowserTelemetry(body),
+    });
+    io.to("admins").emit("visitor_event", row);
+    res.status(204).send();
   }));
 
   app.get("/robots.txt", (_req, res) => {
@@ -1060,6 +1349,16 @@ async function startServer() {
       );
       setSessionCookie(req, res, user.id);
       const publicUser = await getPublicUserById(user.id);
+      if (publicUser) {
+        void insertVisitorEvent(req, {
+          eventType: "login",
+          user: publicUser,
+          statusCode: 200,
+          path: "/api/auth/register",
+        }).then((row) => io.to("admins").emit("visitor_event", row)).catch((error) => {
+          console.error("[TELEMETRY] Login tracking failed:", error);
+        });
+      }
       return res.json({ success: true, user: publicUser });
     }
 
@@ -1088,6 +1387,14 @@ async function startServer() {
       [getClientIp(req), created.rows[0].id],
     );
     setSessionCookie(req, res, created.rows[0].id);
+    void insertVisitorEvent(req, {
+      eventType: "register",
+      user: created.rows[0],
+      statusCode: 201,
+      path: "/api/auth/register",
+    }).then((row) => io.to("admins").emit("visitor_event", row)).catch((error) => {
+      console.error("[TELEMETRY] Registration tracking failed:", error);
+    });
     res.status(201).json({ success: true, user: created.rows[0] });
   }));
 
@@ -1297,6 +1604,48 @@ Si no lo encuentras, responde exactamente: NOT_FOUND`,
     res.json(rows.rows);
   }));
 
+  app.get("/api/admin/traffic", asyncRoute(async (req, res) => {
+    await requireAdmin(req);
+    const limitRaw = Number(req.query.limit || 100);
+    const limit = Number.isInteger(limitRaw) ? Math.min(300, Math.max(25, limitRaw)) : 100;
+    const events = await pool.query<VisitorEventRow>(
+      `SELECT *
+       FROM visitor_events
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+    const summary = await pool.query<{
+      total_events: string;
+      unique_ips: string;
+      authenticated_events: string;
+      anonymous_events: string;
+      countries: unknown;
+      browsers: unknown;
+    }>(
+      `SELECT
+         count(*)::text AS total_events,
+         count(DISTINCT ip)::text AS unique_ips,
+         count(*) FILTER (WHERE authenticated)::text AS authenticated_events,
+         count(*) FILTER (WHERE NOT authenticated)::text AS anonymous_events,
+         COALESCE(jsonb_object_agg(country, country_count) FILTER (WHERE country IS NOT NULL), '{}'::jsonb) AS countries,
+         COALESCE(jsonb_object_agg(browser, browser_count) FILTER (WHERE browser IS NOT NULL), '{}'::jsonb) AS browsers
+       FROM (
+         SELECT
+           COALESCE(cf_country, CASE WHEN ip LIKE '192.168.%' OR ip LIKE '10.%' THEN 'LAN' END) AS country,
+           browser_name AS browser,
+           count(*) OVER () AS ignored,
+           count(*) OVER (PARTITION BY COALESCE(cf_country, CASE WHEN ip LIKE '192.168.%' OR ip LIKE '10.%' THEN 'LAN' END)) AS country_count,
+           count(*) OVER (PARTITION BY browser_name) AS browser_count,
+           authenticated,
+           ip
+         FROM visitor_events
+         WHERE created_at > now() - interval '24 hours'
+       ) recent`,
+    );
+    res.json({ events: events.rows, summary: summary.rows[0] || {} });
+  }));
+
   app.post("/api/users/points", asyncRoute(async (req, res) => {
     const user = await requireSession(req);
     const body = asObject(req.body);
@@ -1422,11 +1771,15 @@ Si no lo encuentras, responde exactamente: NOT_FOUND`,
 
   io.on("connection", (socket) => {
     const currentUser = () => socket.data.user as PublicUser;
+    if (currentUser().role === "admin") {
+      socket.join("admins");
+    }
 
     socket.on("user_online", async () => {
       const user = await getPublicUserById(currentUser().id);
       if (!user) return socket.emit("force_logout");
       socket.data.user = user;
+      if (user.role === "admin") socket.join("admins");
       onlineUsers.set(socket.id, user);
       const uniqueUsers = Array.from(new Map(Array.from(onlineUsers.values()).map((item) => [item.id, item])).values());
       io.emit("update_online_users", uniqueUsers);

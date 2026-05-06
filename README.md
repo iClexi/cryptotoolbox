@@ -21,7 +21,9 @@ The assignment also required a public domain, SSL certificate validation with Le
 - Algorithm wiki with security notes.
 - User profiles, reputation, global chat, private messages, and activity feed.
 - Login, registration, terms acceptance, SMTP-ready PIN recovery, account lockout, and auth rate limiting.
-- Hardened Express API using PostgreSQL, signed sessions, HttpOnly cookies, CSP, stricter input validation, login auditing, and case-insensitive account indexes.
+- Registration profile fields with first name, last name, email, gender, and birth-date validation for ages 13 through 150.
+- Admin traffic panel for authenticated and anonymous visits, including IP, browser, OS, device, language, viewport, timezone, and Cloudflare location headers when present.
+- Hardened Express API using PostgreSQL, signed sessions, HttpOnly cookies, CSP, stricter input validation, login auditing, visitor telemetry, and case-insensitive account indexes.
 
 ## Tech Stack
 
@@ -33,6 +35,7 @@ The assignment also required a public domain, SSL certificate validation with Le
 - PostgreSQL
 - Tailwind CSS
 - Lucide Icons
+- Anime.js
 
 ## Source Setup
 

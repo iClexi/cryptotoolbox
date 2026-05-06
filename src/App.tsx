@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, ReactNode, ChangeEvent, FormEvent } from 'react';
+import { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, ReactNode, ChangeEvent, FormEvent, RefObject } from 'react';
 import { Shield, Clipboard, Check, Search, AlertCircle, Download, Zap, Globe, Hash, Unlock, Type, X, Copy, Trophy, Play, ChevronRight, LogOut, User, Fingerprint, Sparkles, Filter, ArrowUpDown, Bell, Settings, Palette, Database, MessageSquare, Send, ShieldCheck, Calendar, File, Edit2, Trash2, BookOpen, Users, Plus, CheckCircle2, Cpu, Award, Code, Star, Mail, RotateCcw, FileSearch } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { animate, stagger } from 'animejs';
 import CryptoJS from 'crypto-js';
 import { io } from 'socket.io-client';
 import { Toaster, toast } from 'sonner';
@@ -41,6 +42,37 @@ interface UserProfile {
   points?: number;
   rank?: string;
   level?: number;
+  created_at: string;
+}
+
+interface VisitorEvent {
+  id: number;
+  event_type: string;
+  user_id: number | null;
+  username: string | null;
+  authenticated: boolean;
+  ip: string;
+  method: string | null;
+  path: string | null;
+  status_code: number | null;
+  user_agent: string | null;
+  browser_name: string | null;
+  os_name: string | null;
+  device_type: string | null;
+  accept_language: string | null;
+  browser_language: string | null;
+  platform: string | null;
+  screen: string | null;
+  viewport: string | null;
+  timezone: string | null;
+  browser_timezone: string | null;
+  connection_type: string | null;
+  referrer: string | null;
+  origin: string | null;
+  cf_country: string | null;
+  cf_region: string | null;
+  cf_city: string | null;
+  cf_timezone: string | null;
   created_at: string;
 }
 
@@ -131,6 +163,8 @@ type AuthMode = 'login' | 'register';
 const BRAND_LOGO_SRC = '/logo.png';
 const MIN_SECURE_PIN_LENGTH = 6;
 const MAX_PIN_LENGTH = 8;
+const MIN_USER_AGE = 13;
+const MAX_USER_AGE = 150;
 const normalizePinInput = (value: string) => value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH);
 const isSecurePin = (value: string) => value.length >= MIN_SECURE_PIN_LENGTH && value.length <= MAX_PIN_LENGTH;
 const isCredentialPin = (value: string) => value.length >= 4 && value.length <= MAX_PIN_LENGTH;
@@ -559,7 +593,7 @@ const TermsPage = ({ onBack, onOpenAuth }: { onBack: () => void, onOpenAuth: (mo
         {[
           ['Uso permitido', 'La plataforma debe usarse para aprendizaje, comprobacion de integridad, documentacion tecnica y pruebas autorizadas. No debe emplearse para ocultar, distribuir o validar software malicioso.'],
           ['Cuentas y seguridad', 'Cada usuario es responsable de su nombre de usuario y PIN. No compartas credenciales y cierra sesion cuando uses equipos compartidos.'],
-          ['Datos registrados', 'La aplicacion puede guardar usuarios, hashes generados, actividad tecnica y mensajes internos para operar la experiencia colaborativa.'],
+          ['Datos registrados', 'La aplicacion puede guardar usuarios, hashes generados, actividad tecnica, mensajes internos, IP, navegador, idioma, pantalla, zona horaria y pais cuando el proxy lo provee para seguridad y administracion.'],
           ['Verificacion de hashes', 'Los hashes publicados sirven como referencia tecnica. Antes de ejecutar archivos descargados, compara la firma y valida tambien la fuente oficial.'],
           ['Disponibilidad', 'El servicio puede cambiar, reiniciarse o limitarse por mantenimiento, seguridad o ajustes academicos del proyecto.'],
           ['Privacidad', 'No publiques contrasenas reales, llaves privadas, tokens ni datos sensibles dentro de chats, wiki, nombres de archivo o campos de prueba.']
@@ -628,8 +662,52 @@ function AuthInput({
   );
 }
 
-const NAME_REGEX = /^[A-Za-zÃÃ‰ÃÃ“ÃšÃ‘ÃœÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼]+(?:[ \-'][A-Za-zÃÃ‰ÃÃ“ÃšÃ‘ÃœÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼]+)*$/;
-const sanitizeName = (value: string) => value.replace(/[^A-Za-zÃÃ‰ÃÃ“ÃšÃ‘ÃœÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼ '\-]/g, '');
+const NAME_REGEX = /^[A-Za-zÁÉÍÓÚÑÜáéíóúñü]+(?:[ \-'][A-Za-zÁÉÍÓÚÑÜáéíóúñü]+)*$/;
+const sanitizeName = (value: string) => value.replace(/[^A-Za-zÁÉÍÓÚÑÜáéíóúñü '\-]/g, '');
+
+const useAnimeEntrance = (scopeRef: RefObject<HTMLElement | null>, trigger: unknown) => {
+  useEffect(() => {
+    const scope = scopeRef.current;
+    if (!scope || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const targets = scope.querySelectorAll('[data-anime="fade-up"]');
+    if (!targets.length) return;
+    const entrance = animate(targets, {
+      opacity: [0, 1],
+      translateY: [18, 0],
+      scale: [0.985, 1],
+      duration: 680,
+      delay: stagger(45),
+      ease: 'outCubic'
+    });
+    return () => entrance.pause();
+  }, [scopeRef, trigger]);
+};
+
+const sendBrowserTelemetry = (profile: UserProfile | null) => {
+  const connection = (navigator as any).connection;
+  const payload = {
+    path: window.location.pathname,
+    language: navigator.language,
+    languages: navigator.languages?.join(', '),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    platform: navigator.platform,
+    userAgent: navigator.userAgent,
+    screen: `${window.screen.width}x${window.screen.height}x${window.screen.colorDepth}`,
+    viewport: `${window.innerWidth}x${window.innerHeight}`,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    deviceMemory: (navigator as any).deviceMemory,
+    connection: connection ? `${connection.effectiveType || 'unknown'} / ${connection.downlink || '?'} Mbps` : null,
+    touchPoints: navigator.maxTouchPoints,
+    authenticated: Boolean(profile)
+  };
+
+  fetch('/api/telemetry/visit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    keepalive: true
+  }).catch(() => undefined);
+};
 
 const todayIso = () => {
   const d = new Date();
@@ -642,8 +720,8 @@ const todayIso = () => {
 const getBirthDateBounds = () => {
   const { yyyy, mm, dd } = todayIso();
   return {
-    min: `${yyyy - 120}-${mm}-${dd}`,
-    max: `${yyyy - 12}-${mm}-${dd}`
+    min: `${yyyy - MAX_USER_AGE}-${mm}-${dd}`,
+    max: `${yyyy - MIN_USER_AGE}-${mm}-${dd}`
   };
 };
 
@@ -680,11 +758,14 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
   const [recoveryLoading, setRecoveryLoading] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState('');
   const [recoveryError, setRecoveryError] = useState('');
+  const authScopeRef = useRef<HTMLDivElement | null>(null);
   const isRegister = mode === 'register';
+
+  useAnimeEntrance(authScopeRef, mode);
 
   const birthBounds = useMemo(() => getBirthDateBounds(), []);
   const birthAge = birthDate ? computeAge(birthDate) : NaN;
-  const isBirthDateValid = !Number.isNaN(birthAge) && birthAge >= 12 && birthAge <= 120;
+  const isBirthDateValid = !Number.isNaN(birthAge) && birthAge >= MIN_USER_AGE && birthAge <= MAX_USER_AGE;
   const firstNameValid = NAME_REGEX.test(firstName.trim());
   const lastNameValid = NAME_REGEX.test(lastName.trim());
   const trimmedUsername = username.trim();
@@ -717,7 +798,7 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
         return;
       }
       if (!isBirthDateValid) {
-        setError('Debes tener entre 12 y 120 aÃ±os.');
+        setError(`Debes tener entre ${MIN_USER_AGE} y ${MAX_USER_AGE} años.`);
         return;
       }
     }
@@ -776,8 +857,8 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 lg:p-10 font-sans bg-[#050505] text-white">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-[1400px] w-full border border-white/10 rounded-xl shadow-2xl relative overflow-hidden bg-[#0b0f14]">
+    <div ref={authScopeRef} className="min-h-screen flex items-center justify-center p-4 sm:p-6 lg:p-10 font-sans bg-[#050505] text-white">
+      <motion.div data-anime="fade-up" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-[1400px] w-full border border-white/10 rounded-xl shadow-2xl relative overflow-hidden bg-[#0b0f14]">
         <div className="grid lg:grid-cols-[0.86fr_1.14fr]">
           <div className="p-8 lg:p-10 border-b lg:border-b-0 lg:border-r border-white/10 bg-white/[0.03]">
             <button onClick={onBackToHome} className="mb-8 flex items-center gap-2 text-xs font-black text-white/50 hover:text-white transition-colors">
@@ -799,19 +880,19 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
                 </p>
               </div>
               <div className="grid gap-3 pt-4">
-                <div className="flex items-center gap-3 text-sm text-white/62">
+                <div data-anime="fade-up" className="flex items-center gap-3 text-sm text-white/62">
                   <div className="w-8 h-8 rounded-lg bg-black/25 border border-white/10 flex items-center justify-center">
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
                   </div>
                   Sesiones firmadas
                 </div>
-                <div className="flex items-center gap-3 text-sm text-white/62">
+                <div data-anime="fade-up" className="flex items-center gap-3 text-sm text-white/62">
                   <div className="w-8 h-8 rounded-lg bg-black/25 border border-white/10 flex items-center justify-center">
                     <Unlock className="w-4 h-4 text-emerald-400" />
                   </div>
                   PIN protegido
                 </div>
-                <div className="flex items-center gap-3 text-sm text-white/62">
+                <div data-anime="fade-up" className="flex items-center gap-3 text-sm text-white/62">
                   <div className="w-8 h-8 rounded-lg bg-black/25 border border-white/10 flex items-center justify-center">
                     <Database className="w-4 h-4 text-emerald-400" />
                   </div>
@@ -869,7 +950,7 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
                   </div>
                   <AuthInput label="Correo electronico" icon={<Mail className="w-4 h-4" />} value={email} onChange={setEmail} placeholder="correo@dominio.com" disabled={loading} maxLength={254} type="email" required />
                   <div className="grid sm:grid-cols-2 gap-4">
-                    <AuthInput label="Fecha de nacimiento" icon={<Calendar className="w-4 h-4" />} value={birthDate} onChange={setBirthDate} disabled={loading} type="date" required min={birthBounds.min} max={birthBounds.max} hint="Edad permitida: 12 a 120 aÃ±os." />
+                    <AuthInput label="Fecha de nacimiento" icon={<Calendar className="w-4 h-4" />} value={birthDate} onChange={setBirthDate} disabled={loading} type="date" required min={birthBounds.min} max={birthBounds.max} hint={`Edad permitida: ${MIN_USER_AGE} a ${MAX_USER_AGE} años.`} />
                     <label className="space-y-2">
                       <span className="text-[11px] font-black uppercase tracking-widest text-white/45">Genero</span>
                       <select required value={gender} onChange={e => setGender(e.target.value)} disabled={loading} className="w-full border border-white/10 rounded-lg py-3 px-3 bg-black/40 text-white outline-none focus:ring-2 focus:ring-emerald-500/40 transition-all">
@@ -1131,7 +1212,7 @@ const UserProfileModal = ({ user, onClose }: { user: any, onClose: () => void })
             <div className="text-left p-4 rounded-2xl bg-black/5 border border-white/5">
               <div className="flex justify-between items-end mb-2">
                 <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Progreso</p>
-                <span className="text-[10px] font-mono font-bold opacity-60">{points} / {nextRank ? nextRank.min : 'âˆž'}</span>
+                <span className="text-[10px] font-mono font-bold opacity-60">{points} / {nextRank ? nextRank.min : '∞'}</span>
               </div>
               <div className="h-2 w-full bg-black/10 rounded-full overflow-hidden p-0.5">
                 <motion.div
@@ -1141,13 +1222,13 @@ const UserProfileModal = ({ user, onClose }: { user: any, onClose: () => void })
                 />
               </div>
               <p className="text-[9px] mt-2 opacity-40 font-bold uppercase tracking-tighter">
-                Siguiente: {nextRank ? nextRank.name : 'Nivel MÃ¡ximo'}
+                Siguiente: {nextRank ? nextRank.name : 'Nivel Máximo'}
               </p>
             </div>
           </div>
 
           <p className="text-xs opacity-60 leading-relaxed italic">
-            "Operador verificado en la red CryptoToolbox. Especialista en protocolos de seguridad y anÃ¡lisis de integridad."
+            "Operador verificado en la red CryptoToolbox. Especialista en protocolos de seguridad y análisis de integridad."
           </p>
         </div>
       </motion.div>
@@ -1268,12 +1349,12 @@ const ChatWindow = ({ userProfile, socket, onlineUsers }: { userProfile: UserPro
     }
 
     if (!socket) {
-      toast.error("Error de conexiÃ³n: No hay socket.");
+      toast.error("Error de conexión: No hay socket.");
       return;
     }
 
     if (!socket.connected) {
-      toast.warning("El chat estÃ¡ desconectado. Intentando reconectar...");
+      toast.warning("El chat está desconectado. Intentando reconectar...");
     }
 
     const messagePayload = {
@@ -1361,7 +1442,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers }: { userProfile: UserPro
             </div>
             <div>
               <h3 className="font-bold" style={{ color: 'var(--text-color)' }}>Chat Comunitario</h3>
-              <p className="text-xs" style={{ color: 'var(--muted-color)' }}>InteractÃºa con otros expertos</p>
+              <p className="text-xs" style={{ color: 'var(--muted-color)' }}>Interactúa con otros expertos</p>
             </div>
           </div>
         </div>
@@ -1378,7 +1459,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers }: { userProfile: UserPro
             </div>
           ) : messages.length === 0 ? (
             <div className="text-center py-12">
-              <p style={{ color: 'var(--muted-color)' }}>No hay mensajes aÃºn. Â¡SÃ© el primero!</p>
+              <p style={{ color: 'var(--muted-color)' }}>No hay mensajes aún. ¡Sé el primero!</p>
             </div>
           ) : (
             messages.map((msg) => (
@@ -1497,9 +1578,9 @@ const ChatWindow = ({ userProfile, socket, onlineUsers }: { userProfile: UserPro
                 <div className="w-20 h-20 bg-red-500/10 rounded-3xl flex items-center justify-center mx-auto mb-6">
                   <Trash2 className="w-10 h-10 text-red-500" />
                 </div>
-                <h4 className="text-2xl font-bold mb-3 text-center" style={{ color: 'var(--text-color)' }}>Â¿Eliminar mensaje?</h4>
+                <h4 className="text-2xl font-bold mb-3 text-center" style={{ color: 'var(--text-color)' }}>¿Eliminar mensaje?</h4>
                 <p className="text-sm mb-8 text-center opacity-70 leading-relaxed" style={{ color: 'var(--text-color)' }}>
-                  Esta acciÃ³n es permanente y el mensaje desaparecerÃ¡ para todos los usuarios del chat.
+                  Esta acción es permanente y el mensaje desaparecerá para todos los usuarios del chat.
                 </p>
                 <div className="grid grid-cols-2 gap-4">
                   <button
@@ -1538,7 +1619,7 @@ const ChatWindow = ({ userProfile, socket, onlineUsers }: { userProfile: UserPro
                   className="w-4 h-4 rounded-full"
                 />
                 <span className="text-[10px] font-bold opacity-50" style={{ color: 'var(--text-color)' }}>
-                  {user.username} estÃ¡ escribiendo...
+                  {user.username} está escribiendo...
                 </span>
                 <div className="flex gap-1">
                   <motion.div animate={{ opacity: [0, 1, 0] }} transition={{ duration: 1, repeat: Infinity }} className="w-1 h-1 rounded-full bg-emerald-500" />
@@ -1824,7 +1905,7 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
                   )}
                 </div>
                 <p className={`text-[10px] opacity-70 ${selectedUser?.id === user.id ? 'text-white' : ''}`}>
-                  Ver conversaciÃ³n
+                  Ver conversación
                 </p>
               </div>
               {userProfile.role === 'admin' && user.role !== 'admin' && (
@@ -1865,8 +1946,8 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
                   }
                 });
               }}
-              title="Â¿Eliminar usuario?"
-              description={`Â¿EstÃ¡s seguro de eliminar a "${userToDelete.username}"? Esta acciÃ³n es permanente.`}
+              title="¿Eliminar usuario?"
+              description={`¿Estás seguro de eliminar a "${userToDelete.username}"? Esta acción es permanente.`}
               confirmLabel="Eliminar"
             />
           )}
@@ -1908,7 +1989,7 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
                 <div className="flex flex-col items-center justify-center h-full opacity-30 text-center px-12">
                   <MessageSquare className="w-12 h-12 mb-4" />
                   <p className="text-sm font-bold">No hay mensajes previos</p>
-                  <p className="text-xs">Inicia una conversaciÃ³n segura con {selectedUser.username}</p>
+                  <p className="text-xs">Inicia una conversación segura con {selectedUser.username}</p>
                 </div>
               ) : (
                 messages.map((msg) => (
@@ -1979,8 +2060,8 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
             <div className="w-24 h-24 rounded-full bg-emerald-500/10 flex items-center justify-center mb-6">
               <Users className="w-12 h-12 text-emerald-500" />
             </div>
-            <h3 className="text-xl font-bold mb-2" style={{ color: 'var(--text-color)' }}>MensajerÃ­a Privada</h3>
-            <p className="text-sm max-w-xs" style={{ color: 'var(--text-color)' }}>Selecciona un contacto de la lista para iniciar una comunicaciÃ³n encriptada de punto a punto.</p>
+            <h3 className="text-xl font-bold mb-2" style={{ color: 'var(--text-color)' }}>Mensajería Privada</h3>
+            <p className="text-sm max-w-xs" style={{ color: 'var(--text-color)' }}>Selecciona un contacto de la lista para iniciar una comunicación encriptada de punto a punto.</p>
           </div>
         )}
         <AnimatePresence>
@@ -1996,20 +2077,160 @@ const DirectMessages = ({ userProfile, socket }: { userProfile: UserProfile, soc
   );
 };
 
+const AdminTrafficPanel = ({ socket }: { socket: any }) => {
+  const [events, setEvents] = useState<VisitorEvent[]>([]);
+  const [summary, setSummary] = useState<any>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  useAnimeEntrance(panelRef, events.length);
+
+  const fetchTraffic = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/traffic?limit=150');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'No se pudo cargar el trafico');
+      setEvents(data.events || []);
+      setSummary(data.summary || {});
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTraffic();
+  }, [fetchTraffic]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleVisitorEvent = (event: VisitorEvent) => {
+      setEvents((current) => [event, ...current.filter((item) => item.id !== event.id)].slice(0, 150));
+    };
+    socket.on('visitor_event', handleVisitorEvent);
+    return () => {
+      socket.off('visitor_event', handleVisitorEvent);
+    };
+  }, [socket]);
+
+  const formatLocation = (event: VisitorEvent) => {
+    const parts = [event.cf_city, event.cf_region, event.cf_country].filter(Boolean);
+    if (parts.length) return parts.join(', ');
+    if (event.cf_country === 'LAN' || event.ip.startsWith('192.168.') || event.ip.startsWith('10.')) return 'LAN / red privada';
+    return 'Sin geolocalizacion';
+  };
+
+  const statCards = [
+    { label: 'Eventos 24h', value: summary.total_events || events.length || 0, icon: Globe, color: '#06b6d4' },
+    { label: 'IPs unicas', value: summary.unique_ips || 0, icon: Fingerprint, color: '#10b981' },
+    { label: 'Autenticados', value: summary.authenticated_events || 0, icon: ShieldCheck, color: '#8b5cf6' },
+    { label: 'Anonimos', value: summary.anonymous_events || 0, icon: Users, color: '#f59e0b' },
+  ];
+
+  return (
+    <div ref={panelRef} className="space-y-6">
+      <div data-anime="fade-up" className="rounded-3xl border p-6 sm:p-8 overflow-hidden relative" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
+        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-emerald-500 via-cyan-500 to-violet-500" />
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-5">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.26em] text-emerald-500">Administracion</p>
+            <h2 className="text-3xl font-black tracking-tight mt-2">Trafico en tiempo real</h2>
+            <p className="text-sm opacity-60 mt-2 max-w-2xl">Registra visitas anonimas y autenticadas, IP publica o privada, navegador, sistema, idioma, pantalla, zona horaria y pais cuando Cloudflare entrega esos headers.</p>
+          </div>
+          <button onClick={fetchTraffic} className="px-4 py-3 rounded-xl text-xs font-black border transition-all hover:scale-[1.02]" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-color)' }}>
+            Actualizar
+          </button>
+        </div>
+      </div>
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {statCards.map((stat) => (
+          <div data-anime="fade-up" key={stat.label} className="rounded-2xl border p-5" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
+            <div className="flex items-center justify-between">
+              <stat.icon className="w-5 h-5" style={{ color: stat.color }} />
+              <span className="text-2xl font-black">{stat.value}</span>
+            </div>
+            <p className="text-[10px] font-black uppercase tracking-widest opacity-45 mt-4">{stat.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {error && <div className="rounded-xl border border-red-500/25 bg-red-500/10 text-red-300 text-sm p-4">{error}</div>}
+      {loading ? (
+        <div className="rounded-3xl border p-8 text-center opacity-60" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>Cargando trafico...</div>
+      ) : (
+        <div data-anime="fade-up" className="rounded-3xl border overflow-hidden" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead style={{ backgroundColor: 'var(--bg-color)' }}>
+                <tr className="uppercase tracking-widest opacity-55">
+                  <th className="p-4">Hora</th>
+                  <th className="p-4">Usuario</th>
+                  <th className="p-4">IP / ubicacion</th>
+                  <th className="p-4">Navegador</th>
+                  <th className="p-4">Pantalla</th>
+                  <th className="p-4">Ruta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map((event) => (
+                  <tr key={event.id} className="border-t align-top" style={{ borderColor: 'var(--border-color)' }}>
+                    <td className="p-4 whitespace-nowrap font-mono opacity-65">{new Date(event.created_at).toLocaleTimeString()}</td>
+                    <td className="p-4">
+                      <div className="font-bold">{event.username || 'Anonimo'}</div>
+                      <div className="opacity-45">{event.event_type} · {event.authenticated ? 'auth' : 'publico'}</div>
+                    </td>
+                    <td className="p-4">
+                      <div className="font-mono">{event.ip}</div>
+                      <div className="opacity-45">{formatLocation(event)}</div>
+                    </td>
+                    <td className="p-4 min-w-[220px]">
+                      <div className="font-bold">{event.browser_name} / {event.os_name}</div>
+                      <div className="opacity-45">{event.platform || event.device_type} · {event.browser_language || event.accept_language || 'sin idioma'}</div>
+                      <div className="opacity-35 truncate max-w-xs">{event.user_agent || 'sin user-agent'}</div>
+                    </td>
+                    <td className="p-4 whitespace-nowrap">
+                      <div>{event.viewport || 'viewport ?'}</div>
+                      <div className="opacity-45">{event.screen || 'screen ?'} · {event.browser_timezone || event.timezone || 'tz ?'}</div>
+                    </td>
+                    <td className="p-4">
+                      <div className="font-mono break-all">{event.method || 'GET'} {event.path || '/'}</div>
+                      <div className="opacity-45">HTTP {event.status_code || '?'}</div>
+                    </td>
+                  </tr>
+                ))}
+                {events.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="p-10 text-center opacity-45">Todavia no hay eventos registrados.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const APP_PREVIEW_DATA: Record<string, AppPreviewData> = {
   putty: {
     name: 'putty.exe',
-    description: 'Un emulador de terminal, consola serie y aplicaciÃ³n de transferencia de archivos de red gratuito y de cÃ³digo abierto. Es la herramienta estÃ¡ndar para conexiones SSH en entornos Windows.',
+    description: 'Un emulador de terminal, consola serie y aplicación de transferencia de archivos de red gratuito y de código abierto. Es la herramienta estándar para conexiones SSH en entornos Windows.',
     image: 'https://images-eds-ssl.xboxlive.com/image?url=4rt9.lXDC4H_93laV1_eHHFT949fUipzkiFOBH3fAiZZUCdYojwUyX2aTonS1aIwMrx6NUIsHfUHSLzjGJFxxrDCrF4C8KvxYUkHBppqZebLObdfSSbqzWqRS3lDi.Ystyxw4_k2Pjh.pceYORwgAJzEZ0VJ3Hwwbhe5wvCwruY-&format=source&h=115',
   },
   plink: {
     name: 'plink.exe',
-    description: 'Una interfaz de lÃ­nea de comandos para los motores de PuTTY. Es una extensiÃ³n vital para la automatizaciÃ³n y el scripting, permitiendo ejecutar comandos remotos de forma segura desde la consola.',
+    description: 'Una interfaz de línea de comandos para los motores de PuTTY. Es una extensión vital para la automatización y el scripting, permitiendo ejecutar comandos remotos de forma segura desde la consola.',
     image: 'https://images-eds-ssl.xboxlive.com/image?url=4rt9.lXDC4H_93laV1_eHHFT949fUipzkiFOBH3fAiZZUCdYojwUyX2aTonS1aIwMrx6NUIsHfUHSLzjGJFxxrDCrF4C8KvxYUkHBppqZebLObdfSSbqzWqRS3lDi.Ystyxw4_k2Pjh.pceYORwgAJzEZ0VJ3Hwwbhe5wvCwruY-&format=source&h=115',
   },
   virtualbox: {
     name: 'VirtualBox-7.0.8-156879-Win.exe',
-    description: 'Un potente software de virtualizaciÃ³n para arquitecturas x86 y AMD64/Intel64. Permite a empresas y usuarios domÃ©sticos ejecutar mÃºltiples sistemas operativos invitados simultÃ¡neamente.',
+    description: 'Un potente software de virtualización para arquitecturas x86 y AMD64/Intel64. Permite a empresas y usuarios domésticos ejecutar múltiples sistemas operativos invitados simultáneamente.',
     image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/ff/VirtualBox_2024_Logo.svg/1280px-VirtualBox_2024_Logo.svg.png',
   },
 };
@@ -2102,6 +2323,12 @@ export default function App() {
     root.style.setProperty('--accent-color', colors.accent);
     root.style.setProperty('--border-color', colors.border);
   }, [currentTheme]);
+
+  useEffect(() => {
+    if (isSessionLoading) return;
+    const telemetryTimer = window.setTimeout(() => sendBrowserTelemetry(userProfile), 350);
+    return () => window.clearTimeout(telemetryTimer);
+  }, [isSessionLoading, userProfile?.id]);
 
   const handleProfileComplete = (profile: UserProfile) => {
     localStorage.setItem('crypto_toolbox_profile', JSON.stringify(profile));
@@ -2206,33 +2433,33 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
     if (hashType === 'sha256') {
       steps.push({
         title: 'Padding Inicial',
-        desc: 'El mensaje se rellena con un bit "1", seguido de ceros, y la longitud del mensaje original en 64 bits para que sea mÃºltiplo de 512 bits.',
+        desc: 'El mensaje se rellena con un bit "1", seguido de ceros, y la longitud del mensaje original en 64 bits para que sea múltiplo de 512 bits.',
         data: CryptoJS.enc.Hex.stringify(data) + '8000...',
         logic: 'Append 1 bit, then k zeros such that (L + 1 + k) % 512 = 448, then 64-bit length.'
       });
       steps.push({
         title: 'Valores Iniciales (H)',
-        desc: 'Se inicializan 8 registros (A-H) con los primeros 32 bits de las partes fraccionarias de las raÃ­ces cuadradas de los primeros 8 nÃºmeros primos.',
+        desc: 'Se inicializan 8 registros (A-H) con los primeros 32 bits de las partes fraccionarias de las raíces cuadradas de los primeros 8 números primos.',
         data: 'H0=6a09e667, H1=bb67ae85, H2=3c6ef372, H3=a54ff53a, H4=510e527f, H5=9b05688c, H6=1f83d9ab, H7=5be0cd19',
         logic: 'Primes: 2, 3, 5, 7, 11, 13, 17, 19. Registers: A, B, C, D, E, F, G, H.'
       });
       steps.push({
         title: 'Message Schedule (W)',
-        desc: 'Se expanden los 512 bits del bloque en 64 palabras de 32 bits (W0-W63) usando funciones de rotaciÃ³n y desplazamiento.',
+        desc: 'Se expanden los 512 bits del bloque en 64 palabras de 32 bits (W0-W63) usando funciones de rotación y desplazamiento.',
         data: 'W[0...63] expansion: ' + CryptoJS.SHA256(input).toString().substring(0, 16) + '...',
         logic: 'W[t] = Ïƒ1(W[t-2]) + W[t-7] + Ïƒ0(W[t-15]) + W[t-16] for t=16 to 63.'
       });
       for(let i=1; i<=4; i++) {
         steps.push({
-          title: `Ronda de CompresiÃ³n ${i}`,
-          desc: `Se aplican funciones lÃ³gicas (Ch, Maj, Î£0, Î£1) y constantes K[t] a los registros A-H en un ciclo de 64 iteraciones.`,
+          title: `Ronda de Compresión ${i}`,
+          desc: `Se aplican funciones lógicas (Ch, Maj, Σ0, Σ1) y constantes K[t] a los registros A-H en un ciclo de 64 iteraciones.`,
           data: CryptoJS.SHA256(input + i).toString().substring(0, 32) + '...',
-          logic: `T1 = h + Î£1(e) + Ch(e,f,g) + K[t] + W[t]; T2 = Î£0(a) + Maj(a,b,c); h=g; g=f; f=e; e=d+T1; d=c; c=b; b=a; a=T1+T2.`
+          logic: `T1 = h + Σ1(e) + Ch(e,f,g) + K[t] + W[t]; T2 = Σ0(a) + Maj(a,b,c); h=g; g=f; f=e; e=d+T1; d=c; c=b; b=a; a=T1+T2.`
         });
       }
       steps.push({
         title: 'Suma Final',
-        desc: 'Los valores de los registros despuÃ©s de 64 rondas se suman a los valores H iniciales para obtener el hash del bloque.',
+        desc: 'Los valores de los registros después de 64 rondas se suman a los valores H iniciales para obtener el hash del bloque.',
         data: 'H0 = H0 + a, H1 = H1 + b, ..., H7 = H7 + h',
         logic: 'Final state addition ensures the compression function is one-way.'
       });
@@ -2245,13 +2472,13 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
     } else if (hashType === 'sha1') {
       steps.push({
         title: 'Pre-procesamiento',
-        desc: 'Se aÃ±ade un bit "1" seguido de ceros y la longitud del mensaje en 64 bits para completar un bloque de 512 bits.',
+        desc: 'Se añade un bit "1" seguido de ceros y la longitud del mensaje en 64 bits para completar un bloque de 512 bits.',
         data: CryptoJS.enc.Hex.stringify(data) + '8000...',
         logic: 'Similar to SHA-2, but uses 160-bit state (5 registers).'
       });
       steps.push({
         title: 'Registros A-E',
-        desc: 'Se inicializan 5 variables de 32 bits con valores constantes especÃ­ficos del estÃ¡ndar SHA-1.',
+        desc: 'Se inicializan 5 variables de 32 bits con valores constantes específicos del estándar SHA-1.',
         data: 'A=67452301, B=efcdab89, C=98badcfe, D=10325476, E=c3d2e1f0',
         logic: 'Initial state: H0, H1, H2, H3, H4.'
       });
@@ -2264,20 +2491,20 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
         });
       }
       steps.push({
-        title: 'AcumulaciÃ³n',
-        desc: 'Los resultados de las 80 rondas se aÃ±aden a los valores iniciales de los registros A, B, C, D y E.',
+        title: 'Acumulación',
+        desc: 'Los resultados de las 80 rondas se añaden a los valores iniciales de los registros A, B, C, D y E.',
         data: 'H0=H0+A, H1=H1+B, H2=H2+C, H3=H3+D, H4=H4+E',
         logic: 'Modulo 2^32 addition of the final state to the initial state.'
       });
       steps.push({
         title: 'Hash Final SHA-1',
-        desc: 'La concatenaciÃ³n de los 5 registros produce el digest final de 160 bits (40 caracteres hexadecimales).',
+        desc: 'La concatenación de los 5 registros produce el digest final de 160 bits (40 caracteres hexadecimales).',
         data: CryptoJS.SHA1(input).toString(),
         logic: 'Concatenate H0 || H1 || H2 || H3 || H4.'
       });
     } else {
       steps.push({
-        title: 'InicializaciÃ³n MD5',
+        title: 'Inicialización MD5',
         desc: 'Se preparan los 4 registros de encadenamiento de 32 bits (A, B, C, D) con valores Little-Endian.',
         data: 'A=01234567, B=89abcdef, C=fedcba98, D=76543210',
         logic: 'Registers: A, B, C, D. Constants derived from sine function.'
@@ -2290,7 +2517,7 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
       });
       for(let i=1; i<=4; i++) {
         steps.push({
-          title: `OperaciÃ³n de Ronda ${i}`,
+          title: `Operación de Ronda ${i}`,
           desc: `Se procesa el bloque de 512 bits en 64 pasos, aplicando rotaciones y sumas modulares con constantes T[i].`,
           data: CryptoJS.MD5(input + i).toString(),
           logic: 'A = B + ((A + F(B,C,D) + X[k] + T[i]) <<< s)'
@@ -2298,7 +2525,7 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
       }
       steps.push({
         title: 'Digest Final MD5',
-        desc: 'El resultado final es un valor de 128 bits, comÃºnmente usado para verificar la integridad de archivos.',
+        desc: 'El resultado final es un valor de 128 bits, comúnmente usado para verificar la integridad de archivos.',
         data: CryptoJS.MD5(input).toString(),
         logic: 'Concatenate A || B || C || D in Little-Endian format.'
       });
@@ -2331,8 +2558,8 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
             <Cpu className="w-6 h-6" style={{ color: colors[hashType] }} />
           </div>
           <div>
-            <h2 className="text-2xl font-bold tracking-tight">Visualizador CriptogrÃ¡fico</h2>
-            <p className="text-xs opacity-50 uppercase tracking-widest font-bold">AnÃ¡lisis de Rondas en Tiempo Real</p>
+            <h2 className="text-2xl font-bold tracking-tight">Visualizador Criptográfico</h2>
+            <p className="text-xs opacity-50 uppercase tracking-widest font-bold">Análisis de Rondas en Tiempo Real</p>
           </div>
         </div>
 
@@ -2458,7 +2685,7 @@ const HashingVisualizer = ({ isDarkMode }: { isDarkMode: boolean }) => {
                       >
                         <div className="flex items-center gap-2 mb-2 opacity-40">
                           <Code className="w-3 h-3" />
-                          <span className="text-[8px] uppercase font-bold tracking-widest">LÃ³gica Interna</span>
+                          <span className="text-[8px] uppercase font-bold tracking-widest">Lógica Interna</span>
                         </div>
                         <p className="text-[10px] font-mono opacity-80 leading-relaxed">{rounds[step].logic}</p>
                       </motion.div>
@@ -2536,7 +2763,7 @@ const ReputationSystem = ({ userProfile }: { userProfile: UserProfile }) => {
             </span>
             <span className="px-3 py-1 rounded-full bg-blue-500/10 text-blue-500 text-xs font-bold border border-blue-500/20 flex items-center gap-2">
               <Zap className="w-3 h-3" />
-              {userProfile.points || 0} Puntos de ReputaciÃ³n
+              {userProfile.points || 0} Puntos de Reputación
             </span>
             <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-500 text-xs font-bold border border-amber-500/20 flex items-center gap-2">
               <Star className="w-3 h-3" />
@@ -2551,9 +2778,9 @@ const ReputationSystem = ({ userProfile }: { userProfile: UserProfile }) => {
           <div className="flex justify-between items-end mb-4">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-1">Progreso de Nivel</p>
-              <h3 className="font-bold text-sm sm:text-base truncate max-w-[180px] sm:max-w-none">Siguiente Rango: {nextRank ? nextRank.name : (isAdmin ? 'Admin MÃ¡ximo' : 'Nivel MÃ¡ximo')}</h3>
+              <h3 className="font-bold text-sm sm:text-base truncate max-w-[180px] sm:max-w-none">Siguiente Rango: {nextRank ? nextRank.name : (isAdmin ? 'Admin Máximo' : 'Nivel Máximo')}</h3>
             </div>
-            <span className="text-xs font-mono font-bold">{userProfile.points || 0} / {nextRank ? nextRank.min : (isAdmin ? 'âˆž' : 'âˆž')}</span>
+            <span className="text-xs font-mono font-bold">{userProfile.points || 0} / {nextRank ? nextRank.min : (isAdmin ? '∞' : '∞')}</span>
           </div>
           <div className="h-4 w-full bg-black/10 rounded-full overflow-hidden border border-white/5 p-1">
             <motion.div
@@ -2590,7 +2817,7 @@ const ReputationSystem = ({ userProfile }: { userProfile: UserProfile }) => {
             <Award className="w-8 h-8 text-blue-500" />
           </div>
           <div className="flex-1 text-center md:text-left">
-            <h4 className="font-bold mb-1">Â¿CÃ³mo ganar reputaciÃ³n?</h4>
+            <h4 className="font-bold mb-1">¿Cómo ganar reputación?</h4>
             <p className="text-xs opacity-60 leading-relaxed">Genera nuevos hashes (+1 pt), decodifica hashes exitosamente (+5 pts) y participa en la comunidad para subir de rango y desbloquear privilegios.</p>
           </div>
         </div>
@@ -2609,7 +2836,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
   onNotificationPrefsChange: (prefs: NotificationPrefs) => void,
   onProfileUpdate: (profile: UserProfile) => void
 }) {
-  const [activeTab, setActiveTab] = useState<'home' | 'verify' | 'generate' | 'decode' | 'activity' | 'file' | 'explorer' | 'chat' | 'wiki' | 'messages' | 'visualizer' | 'reputation'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'verify' | 'generate' | 'decode' | 'activity' | 'file' | 'explorer' | 'chat' | 'wiki' | 'messages' | 'visualizer' | 'reputation' | 'admin'>('home');
   const [activities, setActivities] = useState<Activity[]>([]);
   const [apps, setApps] = useState<any[]>([]);
 
@@ -2632,12 +2859,12 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
         localStorage.setItem('crypto_toolbox_profile', JSON.stringify(updatedProfile));
 
         if (data.rank !== userProfile.rank) {
-          toast.success(`Â¡Nuevo Rango Alcanzado: ${data.rank}!`, {
+          toast.success(`¡Nuevo Rango Alcanzado: ${data.rank}!`, {
             icon: <Award className="w-5 h-5 text-yellow-500" />
           });
         }
       } else if (response.status === 404 || response.status === 401) {
-        toast.error('Tu sesiÃ³n ha expirado o tu usuario ha sido eliminado');
+        toast.error('Tu sesión ha expirado o tu usuario ha sido eliminado');
         onLogout();
       }
     } catch (error) {
@@ -2683,6 +2910,9 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
   const [explorerPage, setExplorerPage] = useState(1);
   const [socket, setSocket] = useState<any>(null);
   const [onlineUsers, setOnlineUsers] = useState<any[]>([]);
+  const mainScopeRef = useRef<HTMLDivElement | null>(null);
+
+  useAnimeEntrance(mainScopeRef, activeTab);
 
   const getDisplayHash = useCallback((hashStr: string, type: 'md5' | 'sha1' | 'sha256') => {
     try {
@@ -2774,7 +3004,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
 
     if (file.size > 500 * 1024 * 1024) {
       toast.error("Archivo demasiado grande", {
-        description: "El lÃ­mite mÃ¡ximo es de 500MB."
+        description: "El límite máximo es de 500MB."
       });
       return;
     }
@@ -2832,12 +3062,12 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       // Update shared cache and global activity
       updateSharedCache({ md5: md5Hash, sha1: sha1Hash, sha256: sha256Hash }, file.name, 'file');
 
-      toast.success("AnÃ¡lisis completado con Ã©xito", {
+      toast.success("Análisis completado con éxito", {
         description: `Se han generado 3 firmas digitales en ${((Date.now() - startTime) / 1000).toFixed(2)}s`
       });
     } catch (error) {
       console.error("Error hashing file:", error);
-      toast.error("Fallo en el anÃ¡lisis de integridad", {
+      toast.error("Fallo en el análisis de integridad", {
         description: "Hubo un problema al procesar los datos del archivo."
       });
     } finally {
@@ -3004,7 +3234,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
 
     newSocket.on('connect_error', (error) => {
       console.error('Socket connection error:', error);
-      toast.error('Error de conexiÃ³n con el servidor de chat');
+      toast.error('Error de conexión con el servidor de chat');
     });
 
     newSocket.on('update_online_users', (users: any[]) => {
@@ -3023,13 +3253,13 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       // Notification for new global activity
       if (notificationPrefs.newActivity && activity.user_name !== userProfile.username) {
         toast.info(`Nueva actividad de ${activity.user_name}`, {
-          description: `${activity.type === 'generate' ? 'GenerÃ³' : activity.type === 'decode' ? 'DecodificÃ³' : activity.type === 'file' ? 'AnalizÃ³' : 'VerificÃ³'} un hash`,
+          description: `${activity.type === 'generate' ? 'Generó' : activity.type === 'decode' ? 'Decodificó' : activity.type === 'file' ? 'Analizó' : 'Verificó'} un hash`,
           icon: activity.type === 'file' ? (
             <File className="w-6 h-6 text-amber-500" />
-          ) : activity.user_avatar && activity.user_avatar !== 'ðŸ‘¤' ? (
+          ) : activity.user_avatar && activity.user_avatar !== '👤' ? (
             <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${activity.user_avatar}`} className="w-6 h-6 rounded-full" />
           ) : (
-            <span className="text-xl">ðŸ‘¤</span>
+            <span className="text-xl">👤</span>
           )
         });
       }
@@ -3054,7 +3284,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
     });
 
     newSocket.on('force_logout', () => {
-      toast.error('Tu sesiÃ³n ha expirado o tu cuenta ya no existe');
+      toast.error('Tu sesión ha expirado o tu cuenta ya no existe');
       onLogout();
     });
 
@@ -3069,7 +3299,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
       if (userProfile.role !== 'admin') {
         setTimeout(() => {
           onLogout();
-          toast.error('Tu sesiÃ³n ha expirado porque la base de datos fue reiniciada');
+          toast.error('Tu sesión ha expirado porque la base de datos fue reiniciada');
         }, 3000);
       }
     });
@@ -3153,7 +3383,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
     if (!isValidLength) {
       setDecodeResult({
         found: false,
-        error: `Longitud de hash invÃ¡lida (${targetHash.length}). Debe ser 32 (MD5), 40 (SHA1) o 64 (SHA256).`,
+        error: `Longitud de hash inválida (${targetHash.length}). Debe ser 32 (MD5), 40 (SHA1) o 64 (SHA256).`,
         time: 0
       });
       return;
@@ -3200,8 +3430,8 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
         });
 
         if (notificationPrefs.rareHash) {
-          toast.success('Â¡Hash decodificado con Ã©xito!', {
-            description: `Valor encontrado: ${text} (vÃ­a ${freeData.source})`
+          toast.success('¡Hash decodificado con éxito!', {
+            description: `Valor encontrado: ${text} (vía ${freeData.source})`
           });
         }
 
@@ -3214,15 +3444,15 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
 
       setDecodeResult({
         found: false,
-        error: "No se encontrÃ³ el valor del hash en las bases de datos online gratuitas.",
+        error: "No se encontró el valor del hash en las bases de datos online gratuitas.",
         time: Date.now() - startTime
       });
-      toast.error('No se encontrÃ³ el valor del hash en las bases de datos online.');
+      toast.error('No se encontró el valor del hash en las bases de datos online.');
     } catch (error) {
       console.error("Decoding search failed:", error);
       setDecodeResult({
         found: false,
-        error: "Error al realizar la bÃºsqueda en lÃ­nea.",
+        error: "Error al realizar la búsqueda en línea.",
         time: Date.now() - startTime
       });
     } finally {
@@ -3231,7 +3461,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
   };
 
   return (
-    <div className={`min-h-screen transition-all duration-500 font-sans selection:bg-emerald-100 select-none`} style={{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)' }}>
+    <div ref={mainScopeRef} className={`min-h-screen transition-all duration-500 font-sans selection:bg-emerald-100 select-none`} style={{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)' }}>
       {/* Top Controls */}
       <div className="fixed top-6 right-6 z-50 flex items-center gap-3">
         {/* Profile Menu */}
@@ -3286,8 +3516,8 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                         onClick={() => {
                           setShowProfileMenu(false);
                           setConfirmAction({
-                            title: 'Â¿Limpiar Base de Datos?',
-                            description: 'Esta acciÃ³n eliminarÃ¡ todos los hashes, usuarios, chats e historial de actividad. No se puede deshacer.',
+                            title: '¿Limpiar Base de Datos?',
+                            description: 'Esta acción eliminará todos los hashes, usuarios, chats e historial de actividad. No se puede deshacer.',
                             onConfirm: async () => {
                               try {
                                 const res = await fetch('/api/admin/hashes', {
@@ -3300,12 +3530,12 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                                   setRecentCached([]);
                                 } else {
                                   const errorData = await res.json();
-                                  console.error("[ADMIN] Error en la peticiÃ³n de limpieza:", errorData);
+                                  console.error("[ADMIN] Error en la petición de limpieza:", errorData);
                                   toast.error(`Error: ${errorData.error || 'No se pudo limpiar'}`);
                                 }
                               } catch (error) {
                                 console.error("[ADMIN] Error de red al limpiar base de datos:", error);
-                                toast.error('Error de conexiÃ³n');
+                                toast.error('Error de conexión');
                               }
                             }
                           });
@@ -3328,7 +3558,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                       <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                         <LogOut className="w-4 h-4" />
                       </div>
-                      Cerrar SesiÃ³n
+                      Cerrar Sesión
                     </button>
                   </div>
                 </motion.div>
@@ -3341,7 +3571,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
           onClick={() => setShowSettings(true)}
           className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg transition-all border`}
           style={{ backgroundColor: 'var(--text-color)', color: 'var(--bg-color)', borderColor: 'var(--border-color)' }}
-          title="ConfiguraciÃ³n"
+          title="Configuración"
         >
           <Settings className="w-6 h-6" />
         </button>
@@ -3355,7 +3585,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
           </div>
           <h1 className={`text-4xl font-semibold tracking-tight mb-3`}>CryptoToolbox & Checksum Verification</h1>
           <p className={`max-w-md mx-auto mb-6 opacity-60`}>
-            Herramientas avanzadas para verificaciÃ³n de integridad, generaciÃ³n de hashes y decodificaciÃ³n.
+            Herramientas avanzadas para verificación de integridad, generación de hashes y decodificación.
           </p>
           <button
             onClick={() => setShowFeatures(true)}
@@ -3409,8 +3639,8 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                     <FeatureItem
                       icon={<Palette className="w-5 h-5" />}
-                      title="GestiÃ³n de Temas"
-                      description="PersonalizaciÃ³n avanzada con temas pre-definidos (Solarized, Gruvbox) y modo oscuro/claro."
+                      title="Gestión de Temas"
+                      description="Personalización avanzada con temas pre-definidos (Solarized, Gruvbox) y modo oscuro/claro."
                     />
                     <FeatureItem
                       icon={<Bell className="w-5 h-5" />}
@@ -3420,7 +3650,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                     <FeatureItem
                       icon={<Filter className="w-5 h-5" />}
                       title="Filtros Inteligentes"
-                      description="BÃºsqueda y clasificaciÃ³n avanzada en el historial de actividad global por tipo y usuario."
+                      description="Búsqueda y clasificación avanzada en el historial de actividad global por tipo y usuario."
                     />
                     <FeatureItem
                       icon={<User className="w-5 h-5" />}
@@ -3430,22 +3660,22 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                     <FeatureItem
                       icon={<Globe className="w-5 h-5" />}
                       title="Feed en Tiempo Real"
-                      description="SincronizaciÃ³n instantÃ¡nea de actividades vÃ­a WebSockets para colaboraciÃ³n en vivo."
+                      description="Sincronización instantánea de actividades vía WebSockets para colaboración en vivo."
                     />
                     <FeatureItem
                       icon={<Shield className="w-5 h-5" />}
-                      title="VerificaciÃ³n de Checksum"
-                      description="ValidaciÃ³n de integridad contra bases de datos oficiales de software conocido."
+                      title="Verificación de Checksum"
+                      description="Validación de integridad contra bases de datos oficiales de software conocido."
                     />
                     <FeatureItem
                       icon={<Search className="w-5 h-5" />}
-                      title="BÃºsqueda por IA"
-                      description="IdentificaciÃ³n de archivos desconocidos mediante Gemini AI y bÃºsqueda semÃ¡ntica."
+                      title="Búsqueda por IA"
+                      description="Identificación de archivos desconocidos mediante Gemini AI y búsqueda semántica."
                     />
                     <FeatureItem
                       icon={<Unlock className="w-5 h-5" />}
                       title="Decodificador Rainbow"
-                      description="RecuperaciÃ³n de texto plano mediante tablas de bÃºsqueda y fuerza bruta optimizada."
+                      description="Recuperación de texto plano mediante tablas de búsqueda y fuerza bruta optimizada."
                     />
                   </div>
 
@@ -3488,21 +3718,23 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
               className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mx-auto"
             >
               {[
-                { id: 'verify', label: 'Verificar Hash', icon: Shield, desc: 'Comprueba si un hash coincide con un texto o aplicaciÃ³n.', color: '#3b82f6' },
+                { id: 'verify', label: 'Verificar Hash', icon: Shield, desc: 'Comprueba si un hash coincide con un texto o aplicación.', color: '#3b82f6' },
                 { id: 'generate', label: 'Generar Hash', icon: Hash, desc: 'Crea hashes MD5, SHA1 y SHA256 a partir de textos.', color: '#f59e0b' },
                 { id: 'file', label: 'Hash de Archivo', icon: Download, desc: 'Analiza y extrae firmas digitales de cualquier archivo.', color: '#10b981' },
                 { id: 'decode', label: 'Decodificar', icon: Unlock, desc: 'Intenta revertir un hash usando fuerza bruta y diccionarios.', color: '#ef4444' },
                 { id: 'explorer', label: 'Explorador', icon: Search, desc: 'Busca en la base de datos global de hashes conocidos.', color: '#8b5cf6' },
                 { id: 'activity', label: 'Actividad Global', icon: Globe, desc: 'Observa las operaciones de hash en tiempo real.', color: '#06b6d4' },
-                { id: 'chat', label: 'Chat Global', icon: MessageSquare, desc: 'ComunÃ­cate con otros expertos en seguridad.', color: '#ec4899' },
+                { id: 'chat', label: 'Chat Global', icon: MessageSquare, desc: 'Comunícate con otros expertos en seguridad.', color: '#ec4899' },
                 { id: 'messages', label: 'Mensajes Directos', icon: Users, desc: 'Conversaciones privadas con otros operadores.', color: '#6366f1' },
-                { id: 'wiki', label: 'Wiki Algoritmos', icon: BookOpen, desc: 'InformaciÃ³n tÃ©cnica sobre algoritmos de hash.', color: '#14b8a6' },
-                { id: 'visualizer', label: 'Visualizador', icon: Cpu, desc: 'Observa paso a paso cÃ³mo se generan las rondas de un hash.', color: '#f97316' },
-                { id: 'reputation', label: 'ReputaciÃ³n', icon: Trophy, desc: 'Tu rango y puntos en la red de expertos en seguridad.', color: '#84cc16' },
-              ].map((module) => (
+                { id: 'wiki', label: 'Wiki Algoritmos', icon: BookOpen, desc: 'Información técnica sobre algoritmos de hash.', color: '#14b8a6' },
+                { id: 'visualizer', label: 'Visualizador', icon: Cpu, desc: 'Observa paso a paso cómo se generan las rondas de un hash.', color: '#f97316' },
+                { id: 'reputation', label: 'Reputación', icon: Trophy, desc: 'Tu rango y puntos en la red de expertos en seguridad.', color: '#84cc16' },
+                { id: 'admin', label: 'Panel Admin', icon: ShieldCheck, desc: 'Monitorea trafico, navegadores, usuarios, IPs y ubicacion en vivo.', color: '#a855f7', adminOnly: true },
+              ].filter((module) => !module.adminOnly || userProfile.role === 'admin').map((module) => (
                 <button
                   key={module.id}
                   onClick={() => setActiveTab(module.id as any)}
+                  data-anime="fade-up"
                   className="group flex flex-col items-start p-6 rounded-3xl border shadow-sm hover:shadow-xl transition-all duration-300 text-left relative overflow-hidden"
                   style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}
                 >
@@ -3529,7 +3761,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                 style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)', color: 'var(--text-color)' }}
               >
                 <ChevronRight className="w-4 h-4 rotate-180 opacity-50 group-hover:opacity-100 transition-opacity" />
-                Volver al MenÃº
+                Volver al Menú
               </button>
 
               <AnimatePresence mode="wait">
@@ -3546,8 +3778,8 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                   <div className={`w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-6 border shadow-inner`} style={{ backgroundColor: 'var(--bg-color)', borderColor: 'var(--border-color)' }}>
                     <Download className={`w-10 h-10`} style={{ color: 'var(--accent-color)' }} />
                   </div>
-                  <h2 className="text-3xl font-bold tracking-tight mb-4">AnÃ¡lisis de Archivos</h2>
-                  <p className="opacity-60 text-sm mb-10 leading-relaxed">Sube cualquier aplicaciÃ³n o archivo (mÃ¡x. 500MB) para generar su firma digital SHA-256 y registrarla en el protocolo global.</p>
+                  <h2 className="text-3xl font-bold tracking-tight mb-4">Análisis de Archivos</h2>
+                  <p className="opacity-60 text-sm mb-10 leading-relaxed">Sube cualquier aplicación o archivo (máx. 500MB) para generar su firma digital SHA-256 y registrarla en el protocolo global.</p>
 
                   <div className="relative group">
                     <input
@@ -3561,7 +3793,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                       </div>
                       <div>
                         <p className="font-bold text-sm">Haga clic o arrastre un archivo</p>
-                        <p className="text-[10px] uppercase tracking-widest opacity-40 mt-1">LÃ­mite de 500MB &bull; SHA-256</p>
+                        <p className="text-[10px] uppercase tracking-widest opacity-40 mt-1">Límite de 500MB &bull; SHA-256</p>
                       </div>
                     </div>
                   </div>
@@ -3605,7 +3837,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                               <Check className="w-4 h-4 text-emerald-500" />
                             </div>
                             <div>
-                              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">AnÃ¡lisis de Integridad Exitoso</p>
+                              <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Análisis de Integridad Exitoso</p>
                               <p className="text-sm font-bold truncate max-w-[200px]">{selectedFile.name}</p>
                             </div>
                           </div>
@@ -3621,10 +3853,10 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                                   }
                                   setSelectedFile(null);
                                   setFileHashes(null);
-                                  toast.success("AnÃ¡lisis y hashes eliminados");
+                                  toast.success("Análisis y hashes eliminados");
                                 }}
                                 className="p-2 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors"
-                                title="Eliminar anÃ¡lisis y hashes"
+                                title="Eliminar análisis y hashes"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -3675,7 +3907,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                             <div className="flex items-center justify-between p-3 rounded-xl bg-black/5 border border-white/5">
                               <div className="flex items-center gap-2">
                                 <Globe className="w-4 h-4 opacity-40" />
-                                <span className="text-xs opacity-60">ReputaciÃ³n Global</span>
+                                <span className="text-xs opacity-60">Reputación Global</span>
                               </div>
                               <span className="text-xs font-bold text-emerald-500">LIMPIO / CONFIABLE</span>
                             </div>
@@ -3687,7 +3919,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                               <span className="text-xs font-bold text-emerald-500">0% AMENAZA</span>
                             </div>
                             <p className="text-[10px] opacity-40 italic mt-2 text-center">
-                              * AnÃ¡lisis basado en bases de datos de firmas digitales conocidas y heurÃ­stica local.
+                              * Análisis basado en bases de datos de firmas digitales conocidas y heurística local.
                             </p>
                           </div>
                         </div>
@@ -3846,7 +4078,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                   {Object.entries(hashCache).length === 0 && (
                     <div className="text-center py-20 opacity-40">
                       <Database className="w-16 h-16 mx-auto mb-4 opacity-20" />
-                      <p>La base de datos estÃ¡ vacÃ­a.</p>
+                      <p>La base de datos está vacía.</p>
                     </div>
                   )}
                 </div>
@@ -3866,7 +4098,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                         Anterior
                       </button>
                       <span className="px-4 text-sm font-medium">
-                        PÃ¡gina {explorerPage} de {Math.ceil(filteredExplorerHashes.length / 100)}
+                        Página {explorerPage} de {Math.ceil(filteredExplorerHashes.length / 100)}
                       </span>
                       <button
                         onClick={() => setExplorerPage(p => Math.min(Math.ceil(filteredExplorerHashes.length / 100), p + 1))}
@@ -3910,10 +4142,10 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                         style={{ backgroundColor: 'var(--bg-color)', borderColor: 'var(--border-color)', color: 'var(--text-color)' }}
                       >
                         <option value="all">Todos los tipos</option>
-                        <option value="generate">GeneraciÃ³n</option>
-                        <option value="decode">DecodificaciÃ³n</option>
-                        <option value="verify">VerificaciÃ³n</option>
-                        <option value="file">AnÃ¡lisis de Archivo</option>
+                        <option value="generate">Generación</option>
+                        <option value="decode">Decodificación</option>
+                        <option value="verify">Verificación</option>
+                        <option value="file">Análisis de Archivo</option>
                       </select>
                     </div>
 
@@ -3999,7 +4231,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                   {filteredActivities.length === 0 ? (
                     <div className="text-center py-12">
                       <Globe className={`w-12 h-12 mx-auto mb-4 opacity-20`} />
-                      <p className={`text-sm opacity-40`}>No se encontrÃ³ actividad con los filtros seleccionados.</p>
+                      <p className={`text-sm opacity-40`}>No se encontró actividad con los filtros seleccionados.</p>
                     </div>
                   ) : (
                     filteredActivities.map((activity) => (
@@ -4016,10 +4248,10 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                               <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl border overflow-hidden`} style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
                                 {activity.type === 'file' ? (
                                   <File className="w-5 h-5 text-amber-500" />
-                                ) : activity.user_avatar && activity.user_avatar !== 'ðŸ‘¤' ? (
+                                ) : activity.user_avatar && activity.user_avatar !== '👤' ? (
                                   <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${activity.user_avatar}`} className="w-full h-full object-cover" alt={activity.user_name} />
                                 ) : (
-                                  'ðŸ‘¤'
+                                  '👤'
                                 )}
                               </div>
                               <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-lg flex items-center justify-center border shadow-sm ${
@@ -4037,13 +4269,13 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                             <div>
                               <div className="flex items-center gap-2">
                                 <span className={`text-xs font-bold`} style={{ color: 'var(--accent-color)' }}>
-                                  {activity.user_name || 'AnÃ³nimo'}
+                                  {activity.user_name || 'Anónimo'}
                                 </span>
                                 <span className={`text-[10px] font-medium opacity-50`}>
-                                  {activity.type === 'generate' ? 'generÃ³ un hash' :
-                                   activity.type === 'decode' ? 'decodificÃ³ un hash' :
-                                   activity.type === 'file' ? 'analizÃ³ un archivo' :
-                                   'verificÃ³ integridad'}
+                                  {activity.type === 'generate' ? 'generó un hash' :
+                                   activity.type === 'decode' ? 'decodificó un hash' :
+                                   activity.type === 'file' ? 'analizó un archivo' :
+                                   'verificó integridad'}
                                 </span>
                               </div>
                               <div className="mt-3 flex flex-col gap-3">
@@ -4133,6 +4365,18 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
             </motion.div>
           )}
 
+          {activeTab === 'admin' && userProfile.role === 'admin' && (
+            <motion.div
+              key="admin-tab"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="max-w-6xl mx-auto"
+            >
+              <AdminTrafficPanel socket={socket} />
+            </motion.div>
+          )}
+
           {activeTab === 'verify' && (
             <AppVerifier userProfile={userProfile} apps={apps} onRefresh={fetchApps} awardPoints={awardPoints} />
           )}
@@ -4199,7 +4443,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                     >
                       <div className="flex items-center justify-between mb-4">
                         <h3 className="text-xs font-bold uppercase tracking-widest opacity-50" style={{ color: 'var(--text-color)' }}>Indexado en Tiempo Real</h3>
-                        <span className="text-[10px] font-medium text-emerald-600">Cualquier valor ingresado se guarda automÃ¡ticamente</span>
+                        <span className="text-[10px] font-medium text-emerald-600">Cualquier valor ingresado se guarda automáticamente</span>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {recentCached.map((item, idx) => (
@@ -4230,7 +4474,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                               )}
                             </div>
                             <div className="flex gap-1 opacity-60 text-[8px] uppercase font-bold">
-                              <span>MD5</span> â€¢ <span>SHA1</span> â€¢ <span>SHA256</span>
+                              <span>MD5</span> • <span>SHA1</span> • <span>SHA256</span>
                             </div>
                           </motion.div>
                         ))}
@@ -4270,7 +4514,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                         onChange={(e) => {
                           const cleaned = smartCleanHash(e.target.value);
                           if (cleaned.length > 64) {
-                            setDecodeInputError("Hash demasiado largo (mÃ¡x 64 caracteres)");
+                            setDecodeInputError("Hash demasiado largo (máx 64 caracteres)");
                             setTimeout(() => setDecodeInputError(null), 3000);
                           }
                           setHashToDecode(cleaned.substring(0, 64));
@@ -4370,7 +4614,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                           <div className="space-y-4">
                             <div className="flex items-center gap-3 text-emerald-400">
                               <Check className="w-6 h-6 text-emerald-500" />
-                              <h3 className="text-lg font-semibold">Â¡Hash Decodificado!</h3>
+                              <h3 className="text-lg font-semibold">¡Hash Decodificado!</h3>
                             </div>
                             <div className="relative group">
                               <div
@@ -4409,7 +4653,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                             </div>
                             <div className="grid grid-cols-2 gap-4 pt-2">
                               <div className="text-emerald-500/70">
-                                <span className="text-[10px] font-bold uppercase tracking-widest block mb-1">MÃ©todo</span>
+                                <span className="text-[10px] font-bold uppercase tracking-widest block mb-1">Método</span>
                                 <div className="flex items-center gap-1.5 text-xs">
                                   {decodeResult.method === 'database' ? (
                                     <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20">
@@ -4418,7 +4662,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                                   ) : decodeResult.method === 'brute-force' ? (
                                     'Diccionario / Fuerza Bruta'
                                   ) : (
-                                    'BÃºsqueda en LÃ­nea (AI)'
+                                    'Búsqueda en Línea (AI)'
                                   )}
                                 </div>
                               </div>
@@ -4456,15 +4700,15 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                     style={{ backgroundColor: 'rgba(255, 255, 255, 0.02)', borderColor: 'var(--border-color)' }}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-xs font-bold uppercase tracking-widest opacity-50" style={{ color: 'var(--text-color)' }}>CÃ³mo funciona</h4>
+                      <h4 className="text-xs font-bold uppercase tracking-widest opacity-50" style={{ color: 'var(--text-color)' }}>Cómo funciona</h4>
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border text-emerald-600 bg-emerald-500/10 border-emerald-500/20">
                         {Object.keys(hashCache).length} hashes en memoria
                       </span>
                     </div>
                     <ul className="text-xs space-y-2 list-disc pl-4 opacity-50" style={{ color: 'var(--text-color)' }}>
-                      <li>Primero consultamos nuestra "Rainbow Table" local (cachÃ©), que guarda instantÃ¡neamente cualquier hash generado en esta sesiÃ³n.</li>
+                      <li>Primero consultamos nuestra "Rainbow Table" local (caché), que guarda instantáneamente cualquier hash generado en esta sesión.</li>
                       <li>Tambien incluye un diccionario pre-cargado de valores comunes para una decodificacion inmediata.</li>
-                      <li>Si no hay Ã©xito local, utilizamos inteligencia artificial para buscar el hash en bases de datos pÃºblicas.</li>
+                      <li>Si no hay éxito local, utilizamos inteligencia artificial para buscar el hash en bases de datos públicas.</li>
                     </ul>
                   </div>
                 </div>
@@ -4482,7 +4726,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
           style={{ borderColor: 'var(--border-color)' }}
         >
           <p className="text-xs font-mono uppercase tracking-widest opacity-30" style={{ color: 'var(--text-color)' }}>
-            Utilidad de Seguridad &bull; VerificaciÃ³n de Integridad
+            Utilidad de Seguridad &bull; Verificación de Integridad
           </p>
         </footer>
 
@@ -4541,7 +4785,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
       method: 'DELETE'
     }).then(res => {
       if (res.ok) {
-        toast.success('AplicaciÃ³n eliminada');
+        toast.success('Aplicación eliminada');
         onRefresh();
         if (selectedApp === apps.find(a => a.id === id)?.key) setSelectedApp(null);
       }
@@ -4557,7 +4801,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
       body: JSON.stringify(app)
     });
     if (res.ok) {
-      toast.success(app.id ? 'AplicaciÃ³n actualizada' : 'AplicaciÃ³n creada');
+      toast.success(app.id ? 'Aplicación actualizada' : 'Aplicación creada');
       setIsEditorOpen(false);
       onRefresh();
     }
@@ -4577,7 +4821,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
             <Shield className="w-6 h-6 text-blue-500" />
           </div>
           <div>
-            <h2 className="text-2xl font-bold tracking-tight">VerificaciÃ³n de Integridad</h2>
+            <h2 className="text-2xl font-bold tracking-tight">Verificación de Integridad</h2>
             <p className="text-sm opacity-60">Comprueba la autenticidad de tus aplicaciones.</p>
           </div>
         </div>
@@ -4692,14 +4936,14 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
                         setUserHash(e.target.value);
                         setIsVerified(false);
                       }}
-                      placeholder="Pega el hash de tu archivo aquÃ­..."
+                      placeholder="Pega el hash de tu archivo aquí..."
                       className="w-full p-5 pr-32 rounded-xl border bg-black/5 font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
                       style={{ borderColor: 'var(--border-color)', color: 'var(--text-color)' }}
                     />
                     <button
                       onClick={async () => {
                         try {
-                          const input = document.querySelector('input[placeholder="Pega el hash de tu archivo aquÃ­..."]') as HTMLInputElement;
+                          const input = document.querySelector('input[placeholder="Pega el hash de tu archivo aquí..."]') as HTMLInputElement;
                           if (input) input.focus();
 
                           const text = await navigator.clipboard.readText();
@@ -4741,7 +4985,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
                         <div className="w-16 h-16 rounded-full bg-black/5 flex items-center justify-center mx-auto opacity-20">
                           <Shield className="w-8 h-8" />
                         </div>
-                        <p className="text-xs opacity-40 font-bold uppercase tracking-widest">Esperando firma digital para anÃ¡lisis...</p>
+                        <p className="text-xs opacity-40 font-bold uppercase tracking-widest">Esperando firma digital para análisis...</p>
                       </motion.div>
                     ) : (
                       <motion.div key="result" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="space-y-6 z-10 w-full max-w-lg">
@@ -4750,12 +4994,12 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
                         </div>
                         <div className="space-y-2">
                           <h4 className={`text-2xl font-black uppercase tracking-tight ${verifyResult?.match ? 'text-emerald-500' : 'text-red-500'}`}>
-                            {verifyResult?.match ? 'Â¡INTEGRIDAD VERIFICADA!' : 'FIRMA NO COINCIDE'}
+                            {verifyResult?.match ? '¡INTEGRIDAD VERIFICADA!' : 'FIRMA NO COINCIDE'}
                           </h4>
                           <p className="text-sm opacity-70 leading-relaxed font-medium">
                             {verifyResult?.match
-                              ? `Este archivo es 100% autÃ©ntico y coincide exactamente con la firma oficial de ${currentApp.name}.`
-                              : 'AtenciÃ³n: La firma digital proporcionada no coincide con ninguna versiÃ³n oficial conocida.'}
+                              ? `Este archivo es 100% auténtico y coincide exactamente con la firma oficial de ${currentApp.name}.`
+                              : 'Atención: La firma digital proporcionada no coincide con ninguna versión oficial conocida.'}
                           </p>
                         </div>
                         {verifyResult?.match && (
@@ -4825,7 +5069,7 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
           ) : (
             <div className="flex flex-col items-center justify-center py-20 text-center space-y-6">
               <div className="w-24 h-24 rounded-3xl bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20"><Shield className="w-10 h-10 text-emerald-500" /></div>
-              <div className="max-w-md"><h3 className="text-2xl font-bold mb-2">VerificaciÃ³n de Integridad</h3><p className="text-sm opacity-60 leading-relaxed">Selecciona una aplicaciÃ³n de la lista superior para verificar si el archivo que tienes es la versiÃ³n oficial y no ha sido modificado.</p></div>
+              <div className="max-w-md"><h3 className="text-2xl font-bold mb-2">Verificación de Integridad</h3><p className="text-sm opacity-60 leading-relaxed">Selecciona una aplicación de la lista superior para verificar si el archivo que tienes es la versión oficial y no ha sido modificado.</p></div>
             </div>
           )}
         </AnimatePresence>
@@ -4844,8 +5088,8 @@ function AppVerifier({ userProfile, apps, onRefresh, awardPoints }: { userProfil
             isOpen={!!appToDelete}
             onClose={() => setAppToDelete(null)}
             onConfirm={() => handleDelete(appToDelete.id)}
-            title="Â¿Eliminar aplicaciÃ³n?"
-            description={`Â¿EstÃ¡s seguro de eliminar "${appToDelete.name}"? Esta acciÃ³n no se puede deshacer.`}
+            title="¿Eliminar aplicación?"
+            description={`¿Estás seguro de eliminar "${appToDelete.name}"? Esta acción no se puede deshacer.`}
             confirmLabel="Eliminar"
           />
         )}
@@ -4870,13 +5114,13 @@ function AppEditor({ app, onClose, onSave }: { app: any, onClose: () => void, on
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative w-full max-w-2xl rounded-[2.5rem] bg-white shadow-2xl border overflow-hidden" style={{ backgroundColor: 'var(--bg-color)', borderColor: 'var(--border-color)' }}>
         <div className="p-8 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-color)' }}>
-          <h2 className="text-xl font-bold">{app ? 'Editar AplicaciÃ³n' : 'Nueva AplicaciÃ³n'}</h2>
+          <h2 className="text-xl font-bold">{app ? 'Editar Aplicación' : 'Nueva Aplicación'}</h2>
           <button onClick={onClose} className="p-2 rounded-xl hover:bg-black/5 transition-colors"><X className="w-5 h-5" /></button>
         </div>
         <div className="p-8 space-y-4 max-h-[70vh] overflow-y-auto custom-scrollbar">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Key (Ãšnico)</label>
+              <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Key (Único)</label>
               <input type="text" value={formData.key} onChange={e => setFormData({ ...formData, key: e.target.value })} className="w-full p-3 rounded-xl border bg-black/5" placeholder="Ej: putty" />
             </div>
             <div className="space-y-2">
@@ -4885,7 +5129,7 @@ function AppEditor({ app, onClose, onSave }: { app: any, onClose: () => void, on
             </div>
           </div>
           <div className="space-y-2">
-            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">DescripciÃ³n</label>
+            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Descripción</label>
             <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} className="w-full p-3 rounded-xl border bg-black/5 h-24 resize-none" />
           </div>
           <div className="space-y-2">
@@ -4990,7 +5234,7 @@ function AlgorithmWiki({ userProfile }: { userProfile: any }) {
           </div>
           <div>
             <h2 className="text-2xl font-bold tracking-tight">Wiki de Algoritmos</h2>
-            <p className="text-sm opacity-60">Enciclopedia tÃ©cnica de funciones criptogrÃ¡ficas.</p>
+            <p className="text-sm opacity-60">Enciclopedia técnica de funciones criptográficas.</p>
           </div>
         </div>
         {userProfile.role === 'admin' && (
@@ -5080,8 +5324,8 @@ function AlgorithmWiki({ userProfile }: { userProfile: any }) {
             isOpen={!!algoToDelete}
             onClose={() => setAlgoToDelete(null)}
             onConfirm={() => handleDelete(algoToDelete.id)}
-            title="Â¿Eliminar algoritmo?"
-            description={`Â¿EstÃ¡s seguro de eliminar "${algoToDelete.name}"? Esta acciÃ³n no se puede deshacer.`}
+            title="¿Eliminar algoritmo?"
+            description={`¿Estás seguro de eliminar "${algoToDelete.name}"? Esta acción no se puede deshacer.`}
             confirmLabel="Eliminar"
           />
         )}
@@ -5170,12 +5414,12 @@ function WikiEditor({ algo, onClose, onSave }: { algo: any, onClose: () => void,
             </div>
           </div>
           <div className="space-y-2">
-            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">DescripciÃ³n</label>
+            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40">Descripción</label>
             <textarea
               value={formData.description}
               onChange={e => setFormData({ ...formData, description: e.target.value })}
               className="w-full p-3 rounded-xl border bg-black/5 min-h-[100px]"
-              placeholder="DescripciÃ³n del algoritmo..."
+              placeholder="Descripción del algoritmo..."
             />
           </div>
           <div className="space-y-2">
@@ -5184,7 +5428,7 @@ function WikiEditor({ algo, onClose, onSave }: { algo: any, onClose: () => void,
               value={formData.useCase}
               onChange={e => setFormData({ ...formData, useCase: e.target.value })}
               className="w-full p-3 rounded-xl border bg-black/5 min-h-[80px]"
-              placeholder="Â¿CuÃ¡ndo usarlo?"
+              placeholder="¿Cuándo usarlo?"
             />
           </div>
           <div className="space-y-2">
@@ -5246,7 +5490,7 @@ function SettingsModal({ currentTheme, notificationPrefs, onClose, onThemeChange
               <Settings className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-xl font-bold tracking-tight" style={{ color: 'var(--text-color)' }}>ConfiguraciÃ³n del Sistema</h2>
+              <h2 className="text-xl font-bold tracking-tight" style={{ color: 'var(--text-color)' }}>Configuración del Sistema</h2>
               <p className="text-xs font-medium opacity-50" style={{ color: 'var(--text-color)' }}>Personaliza tu entorno de trabajo</p>
             </div>
           </div>
@@ -5313,13 +5557,13 @@ function SettingsModal({ currentTheme, notificationPrefs, onClose, onThemeChange
                 />
                 <NotificationToggle
                   label="Descubrimientos Raros"
-                  description="Alertar cuando se decodifique un hash poco comÃºn."
+                  description="Alertar cuando se decodifique un hash poco común."
                   active={notificationPrefs.rareHash}
                   onChange={(val) => onNotificationPrefsChange({ ...notificationPrefs, rareHash: val })}
                 />
                 <NotificationToggle
                   label="Coincidencias de Archivos"
-                  description="Notificar cuando una verificaciÃ³n coincida con un archivo conocido."
+                  description="Notificar cuando una verificación coincida con un archivo conocido."
                   active={notificationPrefs.verificationMatch}
                   onChange={(val) => onNotificationPrefsChange({ ...notificationPrefs, verificationMatch: val })}
                 />
