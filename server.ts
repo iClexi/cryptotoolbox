@@ -22,10 +22,16 @@ const RESET_TOKEN_TTL_MINUTES = Number.isFinite(configuredResetTtl)
   : 30;
 const HASH_RE = /^(?:[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const USERNAME_RE = /^[A-Za-z0-9_. -]{3,40}$/;
-const PIN_RE = /^\d{4}$/;
+const NEW_PIN_RE = /^\d{6,8}$/;
+const CREDENTIAL_PIN_RE = /^\d{4,8}$/;
 const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
 const UNSAFE_TEXT_RE = /(?:<|>|\u0000|javascript:|data:text|file:|(?:^|[\\/])\.\.(?:[\\/]|$)|(?:^|[\\/])etc[\\/]passwd|[a-zA-Z]:[\\/]|WEB-INF[\\/\\]|--\s*$|;\s*(?:drop|select|insert|update|delete)\b)/i;
 const GENDER_VALUES = new Set(["masculino", "femenino", "otro", "prefiero_no_decir"]);
+const AUTH_RATE_WINDOW_MS = 10 * 60 * 1000;
+const AUTH_RATE_LIMIT = Number(process.env.AUTH_RATE_LIMIT || 20);
+const PASSWORD_RESET_RATE_LIMIT = Number(process.env.PASSWORD_RESET_RATE_LIMIT || 5);
+const ACCOUNT_LOCK_ATTEMPTS = Number(process.env.ACCOUNT_LOCK_ATTEMPTS || 5);
+const ACCOUNT_LOCK_MINUTES = Number(process.env.ACCOUNT_LOCK_MINUTES || 15);
 
 const configuredSessionSecret = process.env.SESSION_SECRET?.trim();
 const sessionSecret = configuredSessionSecret || (isProduction ? "" : randomBytes(32).toString("hex"));
@@ -68,6 +74,19 @@ type SessionPayload = {
   userId: number;
   exp: number;
 };
+
+type LoginUserRow = PublicUser & {
+  pin: string;
+  failed_login_count: number;
+  locked_until: string | Date | null;
+};
+
+type RateLimitEntry = {
+  count: number;
+  resetAt: number;
+};
+
+const rateLimitMap = new Map<string, RateLimitEntry>();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || undefined,
@@ -145,12 +164,19 @@ function normalizeOptionalEmail(value: unknown): string | null {
 function normalizeUsername(value: unknown): string {
   const username = normalizeString(value, "username", 40);
   if (!USERNAME_RE.test(username)) throw httpError(400, "username invalido");
-  return username;
+  return username.toLowerCase();
 }
 
-function normalizePin(value: unknown): string {
-  if (typeof value !== "string" || !PIN_RE.test(value)) {
-    throw httpError(400, "PIN de 4 digitos requerido");
+function normalizeCredentialPin(value: unknown): string {
+  if (typeof value !== "string" || !CREDENTIAL_PIN_RE.test(value)) {
+    throw httpError(400, "PIN numerico invalido");
+  }
+  return value;
+}
+
+function normalizeNewPin(value: unknown): string {
+  if (typeof value !== "string" || !NEW_PIN_RE.test(value)) {
+    throw httpError(400, "PIN de 6 a 8 digitos requerido");
   }
   return value;
 }
@@ -198,6 +224,52 @@ function normalizeGender(value: unknown): string {
 function normalizeTermsAccepted(value: unknown): true {
   if (value !== true) throw httpError(400, "debes aceptar los terminos y condiciones");
   return true;
+}
+
+function getClientIp(req: Request): string {
+  const cfIp = req.headers["cf-connecting-ip"];
+  if (typeof cfIp === "string" && cfIp.trim()) return cfIp.trim().slice(0, 100);
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim().slice(0, 100);
+  }
+  return (req.ip || req.socket.remoteAddress || "unknown").slice(0, 100);
+}
+
+function enforceRateLimit(key: string, limit: number, windowMs: number) {
+  const now = Date.now();
+  const existing = rateLimitMap.get(key);
+  if (!existing || existing.resetAt <= now) {
+    rateLimitMap.set(key, { count: 1, resetAt: now + windowMs });
+    return;
+  }
+
+  existing.count += 1;
+  if (existing.count > limit) {
+    throw httpError(429, "Demasiados intentos. Espera unos minutos e intenta otra vez.");
+  }
+}
+
+function isUserLocked(user: { locked_until: string | Date | null }) {
+  if (!user.locked_until) return false;
+  return new Date(user.locked_until).getTime() > Date.now();
+}
+
+async function recordFailedLogin(user: LoginUserRow) {
+  const nextCount = (user.failed_login_count || 0) + 1;
+  const shouldLock = nextCount >= ACCOUNT_LOCK_ATTEMPTS;
+  await pool.query(
+    `UPDATE users
+     SET failed_login_count = $1,
+         locked_until = CASE WHEN $2 THEN now() + ($3 || ' minutes')::interval ELSE locked_until END,
+         updated_at = now()
+     WHERE id = $4`,
+    [nextCount, shouldLock, ACCOUNT_LOCK_MINUTES, user.id],
+  );
+  if (shouldLock) {
+    throw httpError(429, "Cuenta bloqueada temporalmente por intentos fallidos.");
+  }
+  throw httpError(401, "PIN incorrecto");
 }
 
 function normalizeId(value: unknown, field = "id"): number {
@@ -482,6 +554,8 @@ function isAllowedOrigin(origin: string | undefined): boolean {
 function configureSecurity(app: express.Express) {
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
+  const httpsHardeningEnabled = process.env.FORCE_HTTPS === "true"
+    || (isProduction && process.env.FORCE_HTTPS !== "false");
 
   if (process.env.FORCE_HTTPS === "true") {
     app.use((req, res, next) => {
@@ -520,10 +594,10 @@ function configureSecurity(app: express.Express) {
           : ["'self'", "https://www.nitrxgen.net", "https://md5.gromweb.com", "https://sha1.gromweb.com", "ws:", "wss:"],
         "media-src": ["'self'"],
         "manifest-src": ["'self'"],
-        "upgrade-insecure-requests": isProduction ? [] : null,
+        "upgrade-insecure-requests": httpsHardeningEnabled ? [] : null,
       },
     },
-    hsts: isProduction || process.env.FORCE_HTTPS === "true"
+    hsts: httpsHardeningEnabled
       ? { maxAge: 15552000, includeSubDomains: true }
       : false,
     referrerPolicy: { policy: "no-referrer" },
@@ -634,6 +708,30 @@ async function initializeDatabase() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_date DATE;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_count INTEGER NOT NULL DEFAULT 0 CHECK (failed_login_count >= 0);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_users_locked_until ON users (locked_until);
+    DO $$
+    BEGIN
+      BEGIN
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (lower(username));
+      EXCEPTION WHEN unique_violation THEN
+        RAISE WARNING 'Skipping idx_users_username_lower because duplicate usernames already exist';
+      END;
+
+      BEGIN
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email)) WHERE email IS NOT NULL;
+      EXCEPTION WHEN unique_violation THEN
+        RAISE WARNING 'Skipping idx_users_email_lower because duplicate emails already exist';
+      END;
+    END
+    $$;
   `);
 
   await seedDefaultData();
@@ -719,13 +817,14 @@ async function seedDefaultData() {
     );
   }
 
-  const adminUsername = (process.env.ADMIN_USERNAME || "").trim();
+  const adminUsernameRaw = (process.env.ADMIN_USERNAME || "").trim();
+  const adminUsername = adminUsernameRaw ? normalizeUsername(adminUsernameRaw) : "";
   const adminEmail = normalizeOptionalEmail(process.env.ADMIN_EMAIL || "");
   const adminPin = process.env.ADMIN_PIN || "";
 
   if (adminUsername || adminEmail || adminPin) {
-    if (!adminUsername || !USERNAME_RE.test(adminUsername) || !PIN_RE.test(adminPin)) {
-      console.warn("[DB] ADMIN_USERNAME and ADMIN_PIN must be valid to seed the administrator.");
+    if (!adminUsername || !NEW_PIN_RE.test(adminPin)) {
+      console.warn("[DB] ADMIN_USERNAME and ADMIN_PIN must be valid. ADMIN_PIN must have 6 to 8 digits.");
       return;
     }
     await pool.query(
@@ -739,7 +838,10 @@ async function seedDefaultData() {
            role = 'admin',
            rank = 'System Administrator',
            avatar_seed = EXCLUDED.avatar_seed,
-           terms_accepted_at = COALESCE(users.terms_accepted_at, EXCLUDED.terms_accepted_at)`,
+           terms_accepted_at = COALESCE(users.terms_accepted_at, EXCLUDED.terms_accepted_at),
+           failed_login_count = 0,
+           locked_until = NULL,
+           updated_at = now()`,
       [adminUsername, adminEmail, hashPin(adminPin), adminUsername],
     );
     console.log("[DB] Administrator user provisioned from environment.");
@@ -837,6 +939,7 @@ async function startServer() {
     const body = asObject(req.body);
     const identifier = normalizeString(body.identifier, "usuario o correo", 254);
     const genericMessage = "Si la cuenta existe y tiene correo, recibiras un enlace para restablecer el PIN.";
+    enforceRateLimit(`forgot:${getClientIp(req)}:${identifier.toLowerCase()}`, PASSWORD_RESET_RATE_LIMIT, AUTH_RATE_WINDOW_MS);
 
     await pool.query("DELETE FROM password_resets WHERE expires_at < now() - interval '1 day' OR used_at < now() - interval '1 day'");
 
@@ -880,8 +983,9 @@ async function startServer() {
 
   app.post("/api/auth/reset-password", asyncRoute(async (req, res) => {
     const body = asObject(req.body);
+    enforceRateLimit(`reset:${getClientIp(req)}`, PASSWORD_RESET_RATE_LIMIT, AUTH_RATE_WINDOW_MS);
     const token = normalizeResetToken(body.token);
-    const pin = normalizePin(body.pin);
+    const pin = normalizeNewPin(body.pin);
     const tokenHash = hashResetToken(token);
 
     const client = await pool.connect();
@@ -921,24 +1025,39 @@ async function startServer() {
   app.post("/api/auth/register", asyncRoute(async (req, res) => {
     const body = asObject(req.body);
     const username = normalizeUsername(body.username);
-    const pin = normalizePin(body.pin);
+    const pin = normalizeCredentialPin(body.pin);
     const avatarSeed = normalizeString(body.avatarSeed, "avatarSeed", 80, false) || username;
-    const configuredAdminUsername = process.env.ADMIN_USERNAME?.trim();
+    const configuredAdminUsername = process.env.ADMIN_USERNAME?.trim().toLowerCase();
+    enforceRateLimit(`auth:${getClientIp(req)}:${username}`, AUTH_RATE_LIMIT, AUTH_RATE_WINDOW_MS);
 
-    const existing = await pool.query<{ id: number; pin: string } & PublicUser>(
+    const existing = await pool.query<LoginUserRow>(
       `SELECT id, username, email, first_name, last_name, birth_date, gender,
-              terms_accepted_at, pin, avatar_seed, role, points, rank, level, created_at
+              terms_accepted_at, pin, avatar_seed, role, points, rank, level, created_at,
+              failed_login_count, locked_until
        FROM users
-       WHERE username = $1`,
+       WHERE lower(username) = lower($1)
+       ORDER BY id ASC
+       LIMIT 1`,
       [username],
     );
 
     if (existing.rows[0]) {
       const user = existing.rows[0];
-      if (!verifyPin(pin, user.pin)) throw httpError(401, "PIN incorrecto");
+      if (isUserLocked(user)) throw httpError(429, "Cuenta bloqueada temporalmente. Intenta mas tarde.");
+      if (!verifyPin(pin, user.pin)) await recordFailedLogin(user);
       if (!user.pin.startsWith("scrypt$")) {
         await pool.query("UPDATE users SET pin = $1 WHERE id = $2", [hashPin(pin), user.id]);
       }
+      await pool.query(
+        `UPDATE users
+         SET failed_login_count = 0,
+             locked_until = NULL,
+             last_login_at = now(),
+             last_login_ip = $1,
+             updated_at = now()
+         WHERE id = $2`,
+        [getClientIp(req), user.id],
+      );
       setSessionCookie(req, res, user.id);
       const publicUser = await getPublicUserById(user.id);
       return res.json({ success: true, user: publicUser });
@@ -947,6 +1066,7 @@ async function startServer() {
     if (configuredAdminUsername && username === configuredAdminUsername) {
       throw httpError(403, "El administrador debe crearse desde variables de entorno");
     }
+    normalizeNewPin(pin);
 
     const email = normalizeOptionalEmail(body.email);
     if (!email) throw httpError(400, "email requerido");
@@ -962,6 +1082,10 @@ async function startServer() {
        RETURNING id, username, email, first_name, last_name, birth_date, gender,
                  terms_accepted_at, avatar_seed, role, points, rank, level, created_at`,
       [username, email, firstName, lastName, birthDate, gender, hashPin(pin), avatarSeed],
+    );
+    await pool.query(
+      "UPDATE users SET last_login_at = now(), last_login_ip = $1, updated_at = now() WHERE id = $2",
+      [getClientIp(req), created.rows[0].id],
     );
     setSessionCookie(req, res, created.rows[0].id);
     res.status(201).json({ success: true, user: created.rows[0] });

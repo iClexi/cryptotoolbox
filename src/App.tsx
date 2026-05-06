@@ -129,6 +129,11 @@ interface NotificationPrefs {
 type PublicView = 'landing' | 'auth' | 'terms' | 'reset';
 type AuthMode = 'login' | 'register';
 const BRAND_LOGO_SRC = '/logo.png';
+const MIN_SECURE_PIN_LENGTH = 6;
+const MAX_PIN_LENGTH = 8;
+const normalizePinInput = (value: string) => value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH);
+const isSecurePin = (value: string) => value.length >= MIN_SECURE_PIN_LENGTH && value.length <= MAX_PIN_LENGTH;
+const isCredentialPin = (value: string) => value.length >= 4 && value.length <= MAX_PIN_LENGTH;
 
 const ASSIGNMENT_EXECUTABLES = [
   'plink.exe',
@@ -243,7 +248,7 @@ const PublicLanding = ({ onOpenAuth, onShowTerms }: { onOpenAuth: (mode: AuthMod
   ];
 
   const steps = [
-    { n: '01', title: 'Crea tu cuenta', body: 'Registrate con tus datos basicos y un PIN de cuatro digitos. Sin email marketing, sin contrasenas.' },
+    { n: '01', title: 'Crea tu cuenta', body: 'Registrate con tus datos basicos y un PIN de 6 a 8 digitos. Sin email marketing, sin contrasenas largas.' },
     { n: '02', title: 'Compara o genera', body: 'Verifica un binario que ya descargaste o calcula los hashes de un texto y un archivo desde el navegador.' },
     { n: '03', title: 'Documenta y comparte', body: 'Agrega tus hashes al historial publico, consulta la wiki y registra tu paso por la herramienta.' }
   ];
@@ -685,9 +690,10 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
   const trimmedUsername = username.trim();
   const usernameHasLetter = /[A-Za-z]/.test(trimmedUsername);
   const isUsernameValid = trimmedUsername.length >= 4 && usernameHasLetter;
+  const isPinValid = isRegister ? isSecurePin(pin) : isCredentialPin(pin);
 
   const canSubmit = isUsernameValid
-    && pin.length === 4
+    && isPinValid
     && (!isRegister || Boolean(
       email.trim()
       && firstName.trim() && firstNameValid
@@ -840,7 +846,19 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
             <form onSubmit={handleSubmit} className="space-y-5">
               <div className="grid sm:grid-cols-2 gap-4">
                 <AuthInput label="Usuario" icon={<Fingerprint className="w-4 h-4" />} value={username} onChange={setUsername} placeholder="iclexi_admin" disabled={loading} maxLength={40} minLength={4} required hint={isRegister ? 'Minimo 4 caracteres y al menos una letra.' : undefined} />
-                <AuthInput label="PIN de seguridad" icon={<Unlock className="w-4 h-4" />} value={pin} onChange={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder="0000" disabled={loading} maxLength={4} type="password" required />
+                <AuthInput
+                  label="PIN de seguridad"
+                  icon={<Unlock className="w-4 h-4" />}
+                  value={pin}
+                  onChange={(value) => setPin(normalizePinInput(value))}
+                  placeholder={isRegister ? "123456" : "PIN"}
+                  disabled={loading}
+                  maxLength={MAX_PIN_LENGTH}
+                  minLength={isRegister ? MIN_SECURE_PIN_LENGTH : 4}
+                  type="password"
+                  required
+                  hint={isRegister ? 'Usa 6 a 8 digitos. Los PIN nuevos de 4 digitos ya no se aceptan.' : 'Acepta PIN legado de 4 digitos o PIN nuevo de 6 a 8 digitos.'}
+                />
               </div>
 
               {isRegister && (
@@ -957,8 +975,8 @@ const ResetPinPage = ({ token, onBackToLogin }: { token: string, onBackToLogin: 
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (pin.length !== 4 || confirmPin.length !== 4) {
-      setError('El PIN debe tener 4 digitos.');
+    if (!isSecurePin(pin) || !isSecurePin(confirmPin)) {
+      setError('El PIN debe tener entre 6 y 8 digitos.');
       return;
     }
     if (pin !== confirmPin) {
@@ -1000,18 +1018,18 @@ const ResetPinPage = ({ token, onBackToLogin }: { token: string, onBackToLogin: 
           </div>
           <h1 className="text-3xl sm:text-4xl font-black tracking-tight">Crear PIN nuevo</h1>
           <p className="mt-3 text-sm text-white/58 leading-relaxed">
-            Define un PIN de cuatro digitos. El enlace solo puede usarse una vez y expira por seguridad.
+            Define un PIN de 6 a 8 digitos. El enlace solo puede usarse una vez y expira por seguridad.
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 sm:p-8 space-y-5">
-          <AuthInput label="PIN nuevo" icon={<RotateCcw className="w-4 h-4" />} value={pin} onChange={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder="0000" disabled={loading || Boolean(success)} maxLength={4} type="password" required />
-          <AuthInput label="Confirmar PIN" icon={<Unlock className="w-4 h-4" />} value={confirmPin} onChange={(value) => setConfirmPin(value.replace(/\D/g, '').slice(0, 4))} placeholder="0000" disabled={loading || Boolean(success)} maxLength={4} type="password" required />
+          <AuthInput label="PIN nuevo" icon={<RotateCcw className="w-4 h-4" />} value={pin} onChange={(value) => setPin(normalizePinInput(value))} placeholder="123456" disabled={loading || Boolean(success)} maxLength={MAX_PIN_LENGTH} minLength={MIN_SECURE_PIN_LENGTH} type="password" required />
+          <AuthInput label="Confirmar PIN" icon={<Unlock className="w-4 h-4" />} value={confirmPin} onChange={(value) => setConfirmPin(normalizePinInput(value))} placeholder="123456" disabled={loading || Boolean(success)} maxLength={MAX_PIN_LENGTH} minLength={MIN_SECURE_PIN_LENGTH} type="password" required />
 
           {error && <p className="text-red-300 text-xs border border-red-500/25 bg-red-500/10 rounded-lg p-3">{error}</p>}
           {success && <p className="text-emerald-300 text-xs border border-emerald-500/25 bg-emerald-500/10 rounded-lg p-3">{success}</p>}
 
-          <button type="submit" disabled={pin.length !== 4 || confirmPin.length !== 4 || loading || Boolean(success)} className="w-full py-3 rounded-lg font-black text-black bg-emerald-500 hover:bg-emerald-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/10 active:scale-[0.98]">
+          <button type="submit" disabled={!isSecurePin(pin) || !isSecurePin(confirmPin) || loading || Boolean(success)} className="w-full py-3 rounded-lg font-black text-black bg-emerald-500 hover:bg-emerald-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/10 active:scale-[0.98]">
             {loading ? <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" /> : 'Guardar PIN nuevo'}
           </button>
           {success && (

@@ -20,8 +20,8 @@ The assignment also required a public domain, SSL certificate validation with Le
 - Online/local hash decoding helpers.
 - Algorithm wiki with security notes.
 - User profiles, reputation, global chat, private messages, and activity feed.
-- Login, registration, terms acceptance, and SMTP-ready PIN recovery.
-- Hardened Express API using PostgreSQL, signed sessions, HttpOnly cookies, CSP, and stricter input validation.
+- Login, registration, terms acceptance, SMTP-ready PIN recovery, account lockout, and auth rate limiting.
+- Hardened Express API using PostgreSQL, signed sessions, HttpOnly cookies, CSP, stricter input validation, login auditing, and case-insensitive account indexes.
 
 ## Tech Stack
 
@@ -42,7 +42,7 @@ cp .env.example .env
 npm run dev
 ```
 
-The real `.env` file is intentionally ignored by Git because it must contain private values such as `SESSION_SECRET`, PostgreSQL credentials, admin PINs, and API keys. The committed `.env.example` is only a safe template for developers reading or running the source code.
+The real `.env` file is intentionally ignored by Git because it must contain private values such as `SESSION_SECRET`, PostgreSQL credentials, admin PINs, and API keys. New PINs must use 6 to 8 digits; existing legacy 4-digit PINs are accepted only for login until the user resets them. The committed `.env.example` is only a safe template for developers reading or running the source code.
 
 ## Verification
 

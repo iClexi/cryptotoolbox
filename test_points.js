@@ -9,7 +9,12 @@ try {
       username,
       email: `${username}@example.com`,
       avatarSeed: username,
-      pin: "1234",
+      pin: "123456",
+      firstName: "Test",
+      lastName: "Points",
+      birthDate: "1999-01-01",
+      gender: "prefiero_no_decir",
+      termsAccepted: true,
     }),
   });
 
