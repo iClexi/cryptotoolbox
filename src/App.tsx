@@ -168,6 +168,12 @@ const MAX_USER_AGE = 150;
 const normalizePinInput = (value: string) => value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH);
 const isSecurePin = (value: string) => value.length >= MIN_SECURE_PIN_LENGTH && value.length <= MAX_PIN_LENGTH;
 const isCredentialPin = (value: string) => value.length >= 4 && value.length <= MAX_PIN_LENGTH;
+const GENDER_OPTIONS = [
+  { value: 'masculino', label: 'Masculino', icon: User },
+  { value: 'femenino', label: 'Femenino', icon: User },
+  { value: 'otro', label: 'Otro', icon: Sparkles },
+  { value: 'prefiero_no_decir', label: 'Privado', icon: ShieldCheck },
+] as const;
 
 const ASSIGNMENT_EXECUTABLES = [
   'plink.exe',
@@ -926,7 +932,7 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div className="grid sm:grid-cols-2 gap-4">
-                <AuthInput label="Usuario" icon={<Fingerprint className="w-4 h-4" />} value={username} onChange={setUsername} placeholder="iclexi_admin" disabled={loading} maxLength={40} minLength={4} required hint={isRegister ? 'Minimo 4 caracteres y al menos una letra.' : undefined} />
+                <AuthInput label="Usuario" icon={<Fingerprint className="w-4 h-4" />} value={username} onChange={setUsername} placeholder={isRegister ? 'tu_usuario' : 'usuario'} disabled={loading} maxLength={40} minLength={4} required hint={isRegister ? 'Minimo 4 caracteres y al menos una letra.' : undefined} />
                 <AuthInput
                   label="PIN de seguridad"
                   icon={<Unlock className="w-4 h-4" />}
@@ -951,16 +957,32 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
                   <AuthInput label="Correo electronico" icon={<Mail className="w-4 h-4" />} value={email} onChange={setEmail} placeholder="correo@dominio.com" disabled={loading} maxLength={254} type="email" required />
                   <div className="grid sm:grid-cols-2 gap-4">
                     <AuthInput label="Fecha de nacimiento" icon={<Calendar className="w-4 h-4" />} value={birthDate} onChange={setBirthDate} disabled={loading} type="date" required min={birthBounds.min} max={birthBounds.max} hint={`Edad permitida: ${MIN_USER_AGE} a ${MAX_USER_AGE} años.`} />
-                    <label className="space-y-2">
+                    <div className="space-y-2">
                       <span className="text-[11px] font-black uppercase tracking-widest text-white/45">Genero</span>
-                      <select required value={gender} onChange={e => setGender(e.target.value)} disabled={loading} className="w-full border border-white/10 rounded-lg py-3 px-3 bg-black/40 text-white outline-none focus:ring-2 focus:ring-emerald-500/40 transition-all">
-                        <option value="">Seleccionar</option>
-                        <option value="masculino">Masculino</option>
-                        <option value="femenino">Femenino</option>
-                        <option value="otro">Otro</option>
-                        <option value="prefiero_no_decir">Prefiero no decir</option>
-                      </select>
-                    </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {GENDER_OPTIONS.map((option) => {
+                          const Icon = option.icon;
+                          const selected = gender === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => setGender(option.value)}
+                              disabled={loading}
+                              aria-pressed={selected}
+                              className={`flex min-h-12 items-center gap-2 rounded-lg border px-3 py-3 text-left text-xs font-black transition-all ${
+                                selected
+                                  ? 'border-emerald-300 bg-emerald-400 text-black shadow-lg shadow-emerald-400/15'
+                                  : 'border-white/10 bg-black/35 text-white/65 hover:border-emerald-400/45 hover:bg-emerald-500/10 hover:text-white'
+                              } disabled:cursor-not-allowed disabled:opacity-50`}
+                            >
+                              <Icon className="h-4 w-4 shrink-0" />
+                              <span>{option.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex flex-col sm:flex-row items-center gap-4 rounded-lg border border-white/10 bg-black/25 p-4">
