@@ -865,8 +865,11 @@ async function initializeDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_messages_user_timestamp ON messages (user_id, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_messages_live_feed ON messages (timestamp DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_activities_timestamp ON activities (timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_direct_messages_pair ON direct_messages (sender_id, receiver_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_direct_messages_receiver_timestamp ON direct_messages (receiver_id, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets (user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets (expires_at);
     CREATE INDEX IF NOT EXISTS idx_visitor_events_created_at ON visitor_events (created_at DESC);
@@ -1602,6 +1605,46 @@ Si no lo encuentras, responde exactamente: NOT_FOUND`,
        ORDER BY username ASC`,
     );
     res.json(rows.rows);
+  }));
+
+  app.put("/api/users/profile", asyncRoute(async (req, res) => {
+    const user = await requireSession(req);
+    const body = asObject(req.body);
+    const email = normalizeOptionalEmail(body.email);
+    const firstName = body.firstName === "" || body.firstName === null || body.firstName === undefined
+      ? null
+      : normalizePersonName(body.firstName, "firstName");
+    const lastName = body.lastName === "" || body.lastName === null || body.lastName === undefined
+      ? null
+      : normalizePersonName(body.lastName, "lastName");
+    const birthDate = body.birthDate === "" || body.birthDate === null || body.birthDate === undefined
+      ? null
+      : normalizeBirthDate(body.birthDate);
+    const gender = body.gender === "" || body.gender === null || body.gender === undefined
+      ? null
+      : normalizeGender(body.gender);
+    const avatarSeed = normalizeString(body.avatarSeed, "avatarSeed", 80, false) || user.avatar_seed;
+
+    try {
+      const updated = await pool.query<PublicUser>(
+        `UPDATE users
+         SET email = $1,
+             first_name = $2,
+             last_name = $3,
+             birth_date = $4,
+             gender = $5,
+             avatar_seed = $6,
+             updated_at = now()
+         WHERE id = $7
+         RETURNING id, username, email, first_name, last_name, birth_date, gender,
+                   terms_accepted_at, avatar_seed, role, points, rank, level, created_at`,
+        [email, firstName, lastName, birthDate, gender, avatarSeed, user.id],
+      );
+      res.json({ success: true, user: updated.rows[0] });
+    } catch (error: any) {
+      if (error?.code === "23505") throw httpError(409, "Ese correo ya esta en uso");
+      throw error;
+    }
   }));
 
   app.get("/api/admin/traffic", asyncRoute(async (req, res) => {

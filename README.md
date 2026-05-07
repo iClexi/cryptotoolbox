@@ -1,33 +1,23 @@
 # CryptoToolbox
 
-CryptoToolbox is an academic web app for validating executable integrity with MD5, SHA-1, and SHA-256 hashes. It turns a certificate and checksum assignment into a polished interactive experience with verification tools, hash generation, file analysis, activity history, chat, and an algorithm wiki.
+CryptoToolbox es una plataforma académica para verificar integridad de archivos, generar hashes, analizar checksums y practicar conceptos de certificados digitales en una experiencia web interactiva.
 
-## Project Context
+## Qué Ofrece
 
-This project was built for the **Certificados Digitales** assignment. The core task was to publish a secure HTTPS web page where users can select one of three executables and view its MD5, SHA-1, and SHA-256 values:
+- Verificación de integridad para ejecutables como PuTTY, Plink y VirtualBox.
+- Generación de MD5, SHA-1 y SHA-256.
+- Hashing local de archivos desde el navegador.
+- Decodificación asistida de hashes conocidos.
+- Wiki de algoritmos con notas de uso y riesgos.
+- Perfil de usuario, reputación, puntos y niveles.
+- Chat global, mensajes privados y actividad en tiempo real.
+- Panel de edición de perfil para usuarios normales.
+- Panel admin ampliado con tráfico, navegador, IP, viewport, zona horaria y actividad técnica.
+- Registro, login, recuperación de PIN, bloqueo temporal y rate limiting.
 
-- `plink.exe`
-- `putty.exe`
-- `VirtualBox-7.0.8-156879-Win.exe`
+## Stack
 
-The assignment also required a public domain, SSL certificate validation with Let's Encrypt, and internet access without browser SSL warnings.
-
-## What You Can Explore
-
-- Integrity verification for PuTTY, Plink, and VirtualBox.
-- MD5, SHA-1, and SHA-256 hash generation.
-- File hashing directly in the browser.
-- Online/local hash decoding helpers.
-- Algorithm wiki with security notes.
-- User profiles, reputation, global chat, private messages, and activity feed.
-- Login, registration, terms acceptance, SMTP-ready PIN recovery, account lockout, and auth rate limiting.
-- Registration profile fields with first name, last name, email, gender, and birth-date validation for ages 13 through 150.
-- Admin traffic panel for authenticated and anonymous visits, including IP, browser, OS, device, language, viewport, timezone, and Cloudflare location headers when present.
-- Hardened Express API using PostgreSQL, signed sessions, HttpOnly cookies, CSP, stricter input validation, login auditing, visitor telemetry, and case-insensitive account indexes.
-
-## Tech Stack
-
-- React 19
+- React
 - Vite
 - TypeScript
 - Express
@@ -37,22 +27,6 @@ The assignment also required a public domain, SSL certificate validation with Le
 - Lucide Icons
 - Anime.js
 
-## Source Setup
+## Seguridad y Transparencia
 
-```bash
-npm install
-cp .env.example .env
-npm run dev
-```
-
-The real `.env` file is intentionally ignored by Git because it must contain private values such as `SESSION_SECRET`, PostgreSQL credentials, admin PINs, and API keys. New PINs must use 6 to 8 digits; existing legacy 4-digit PINs are accepted only for login until the user resets them. The committed `.env.example` is only a safe template for developers reading or running the source code.
-
-## Verification
-
-```bash
-npm run lint
-npm run build
-npm audit
-```
-
-The repository does not include local databases, build output, logs, or secret environment files.
+El código está publicado para revisión técnica. Las variables reales de producción, tokens, credenciales de PostgreSQL, PIN admin y claves externas no se versionan; `.env*` está ignorado y `.env.example` funciona solo como plantilla segura.

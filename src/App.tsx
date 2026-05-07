@@ -677,15 +677,30 @@ const useAnimeEntrance = (scopeRef: RefObject<HTMLElement | null>, trigger: unkn
     if (!scope || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const targets = scope.querySelectorAll('[data-anime="fade-up"]');
     if (!targets.length) return;
-    const entrance = animate(targets, {
-      opacity: [0, 1],
-      translateY: [18, 0],
-      scale: [0.985, 1],
-      duration: 680,
-      delay: stagger(45),
-      ease: 'outCubic'
+    targets.forEach((target) => {
+      const element = target as HTMLElement;
+      element.style.opacity = '0';
+      element.style.transform = 'translate3d(0, 10px, 0) scale(0.99)';
+      element.style.willChange = 'opacity, transform';
     });
-    return () => entrance.pause();
+    let entrance: ReturnType<typeof animate> | null = null;
+    const frame = window.requestAnimationFrame(() => {
+      entrance = animate(targets, {
+        opacity: [0, 1],
+        translateY: [10, 0],
+        scale: [0.99, 1],
+        duration: 420,
+        delay: stagger(24),
+        ease: 'outCubic'
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      entrance?.pause();
+      targets.forEach((target) => {
+        (target as HTMLElement).style.willChange = '';
+      });
+    };
   }, [scopeRef, trigger]);
 };
 
@@ -2119,7 +2134,7 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
     }
     setError('');
     try {
-      const response = await fetch('/api/admin/traffic?limit=150');
+      const response = await fetch('/api/admin/traffic?limit=220');
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'No se pudo cargar el trafico');
       setEvents(data.events || []);
@@ -2143,7 +2158,7 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
       setLastEventId(event.id);
       setEvents((current) => {
         const withoutDuplicate = current.filter((item) => item.id !== event.id);
-        return [event, ...withoutDuplicate].slice(0, 150);
+        return [event, ...withoutDuplicate].slice(0, 220);
       });
     };
     socket.on('visitor_event', handleVisitorEvent);
@@ -2222,7 +2237,7 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
             </div>
           </div>
 
-          <div className="max-h-[720px] overflow-y-auto p-3 sm:p-4 space-y-3 custom-scrollbar" data-smooth-scroll>
+          <div className="max-h-[76vh] overflow-y-auto p-3 sm:p-4 space-y-3 custom-scrollbar" data-smooth-scroll>
             {events.map((event) => (
               <article key={event.id} className={`admin-traffic-card rounded-2xl border p-4 transition-colors duration-300 ${event.id === lastEventId ? 'ring-1 ring-emerald-400/50 bg-emerald-500/5' : 'bg-black/5'}`} style={{ borderColor: 'var(--border-color)' }}>
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.9fr)_minmax(0,1.25fr)]">
@@ -2277,6 +2292,101 @@ const AdminTrafficPanel = ({ socket }: { socket: any }) => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+const ProfileSettingsPanel = ({ userProfile, onProfileUpdate }: { userProfile: UserProfile, onProfileUpdate: (profile: UserProfile) => void }) => {
+  const [firstName, setFirstName] = useState(userProfile.first_name || '');
+  const [lastName, setLastName] = useState(userProfile.last_name || '');
+  const [email, setEmail] = useState(userProfile.email || '');
+  const [birthDate, setBirthDate] = useState(userProfile.birth_date ? String(userProfile.birth_date).slice(0, 10) : '');
+  const [gender, setGender] = useState(userProfile.gender || '');
+  const [avatarSeed, setAvatarSeed] = useState(userProfile.avatar_seed || userProfile.username);
+  const [saving, setSaving] = useState(false);
+
+  const saveProfile = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      const response = await fetch('/api/users/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ firstName, lastName, email, birthDate, gender, avatarSeed }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'No se pudo actualizar el perfil');
+      onProfileUpdate(data.user);
+      localStorage.setItem('crypto_toolbox_profile', JSON.stringify(data.user));
+      toast.success('Perfil actualizado en la base de datos');
+    } catch (err: any) {
+      toast.error(err.message || 'No se pudo actualizar el perfil');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-[0.68fr_1.32fr]">
+      <section className="rounded-3xl border p-6 sm:p-8" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
+        <div className="flex flex-col items-center text-center">
+          <div className="h-32 w-32 rounded-[2rem] overflow-hidden border shadow-xl" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-color)' }}>
+            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${avatarSeed || userProfile.username}`} alt={userProfile.username} className="h-full w-full object-cover" />
+          </div>
+          <h2 className="mt-5 text-3xl font-black tracking-tight">{userProfile.username}</h2>
+          <p className="mt-2 text-sm opacity-55">{userProfile.rank} · Nivel {userProfile.level}</p>
+          <div className="mt-6 grid w-full grid-cols-2 gap-3">
+            <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-color)' }}>
+              <p className="text-2xl font-black">{userProfile.points || 0}</p>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-45">Puntos</p>
+            </div>
+            <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-color)' }}>
+              <p className="text-2xl font-black">{userProfile.role === 'admin' ? 'Admin' : 'User'}</p>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-45">Rol</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <form onSubmit={saveProfile} className="rounded-3xl border p-6 sm:p-8 space-y-6" style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.26em] text-emerald-500">Perfil</p>
+          <h2 className="mt-2 text-3xl font-black tracking-tight">Editar información</h2>
+          <p className="mt-2 text-sm opacity-60">Los cambios se guardan directo en PostgreSQL y actualizan tu sesión visual al momento.</p>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <AuthInput label="Nombre" icon={<User className="w-4 h-4" />} value={firstName} onChange={setFirstName} placeholder="Michael" disabled={saving} maxLength={80} />
+          <AuthInput label="Apellido" icon={<User className="w-4 h-4" />} value={lastName} onChange={setLastName} placeholder="Robles" disabled={saving} maxLength={80} />
+          <AuthInput label="Correo" icon={<Mail className="w-4 h-4" />} value={email} onChange={setEmail} placeholder="correo@dominio.com" disabled={saving} maxLength={254} type="email" />
+          <AuthInput label="Nacimiento" icon={<Calendar className="w-4 h-4" />} value={birthDate} onChange={setBirthDate} disabled={saving} type="date" min="1900-01-01" max={todayIso().yyyy + '-' + todayIso().mm + '-' + todayIso().dd} />
+          <label className="space-y-2">
+            <span className="text-[11px] font-black uppercase tracking-widest text-white/45">Género</span>
+            <select
+              value={gender}
+              onChange={(event) => setGender(event.target.value)}
+              disabled={saving}
+              className="w-full border border-white/10 rounded-lg py-3 px-4 bg-black/40 text-white focus:ring-2 focus:ring-emerald-500/40 outline-none transition-all"
+            >
+              <option value="">Sin especificar</option>
+              {GENDER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <AuthInput label="Avatar seed" icon={<Sparkles className="w-4 h-4" />} value={avatarSeed} onChange={setAvatarSeed} placeholder={userProfile.username} disabled={saving} maxLength={80} />
+        </div>
+
+        <button
+          type="submit"
+          disabled={saving}
+          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-2xl px-6 py-3 text-sm font-black transition-all disabled:opacity-60"
+          style={{ backgroundColor: 'var(--accent-color)', color: 'var(--bg-color)' }}
+        >
+          <CheckCircle2 className="w-5 h-5" />
+          {saving ? 'Guardando...' : 'Guardar perfil'}
+        </button>
+      </form>
     </div>
   );
 };
@@ -2900,7 +3010,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
   onNotificationPrefsChange: (prefs: NotificationPrefs) => void,
   onProfileUpdate: (profile: UserProfile) => void
 }) {
-  const [activeTab, setActiveTab] = useState<'home' | 'verify' | 'generate' | 'decode' | 'activity' | 'file' | 'explorer' | 'chat' | 'wiki' | 'messages' | 'visualizer' | 'reputation' | 'admin'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'verify' | 'generate' | 'decode' | 'activity' | 'file' | 'explorer' | 'chat' | 'wiki' | 'messages' | 'visualizer' | 'reputation' | 'profile' | 'admin'>('home');
   const [activities, setActivities] = useState<Activity[]>([]);
   const [apps, setApps] = useState<any[]>([]);
 
@@ -3641,7 +3751,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
         </button>
       </div>
 
-      <div className="max-w-4xl mx-auto px-6 py-12">
+      <div className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-10 py-10 sm:py-12">
         {/* Header */}
         <header className="mb-12 text-center relative">
           <div className={`inline-flex items-center justify-center w-16 h-16 rounded-2xl shadow-sm border mb-6`} style={{ backgroundColor: 'var(--surface-color)', borderColor: 'var(--border-color)' }}>
@@ -3779,7 +3889,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mx-auto"
+              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 max-w-[1380px] mx-auto"
             >
               {[
                 { id: 'verify', label: 'Verificar Hash', icon: Shield, desc: 'Comprueba si un hash coincide con un texto o aplicación.', color: '#3b82f6' },
@@ -3793,8 +3903,9 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
                 { id: 'wiki', label: 'Wiki Algoritmos', icon: BookOpen, desc: 'Información técnica sobre algoritmos de hash.', color: '#14b8a6' },
                 { id: 'visualizer', label: 'Visualizador', icon: Cpu, desc: 'Observa paso a paso cómo se generan las rondas de un hash.', color: '#f97316' },
                 { id: 'reputation', label: 'Reputación', icon: Trophy, desc: 'Tu rango y puntos en la red de expertos en seguridad.', color: '#84cc16' },
+                { id: 'profile', label: 'Editar Perfil', icon: User, desc: 'Actualiza nombre, correo, avatar y datos visibles de tu operador.', color: '#10b981', userOnly: true },
                 { id: 'admin', label: 'Panel Admin', icon: ShieldCheck, desc: 'Monitorea trafico, navegadores, usuarios, IPs y ubicacion en vivo.', color: '#a855f7', adminOnly: true },
-              ].filter((module) => !module.adminOnly || userProfile.role === 'admin').map((module) => (
+              ].filter((module) => (!module.adminOnly || userProfile.role === 'admin') && (!module.userOnly || userProfile.role !== 'admin')).map((module) => (
                 <button
                   key={module.id}
                   onClick={() => setActiveTab(module.id as any)}
@@ -3817,7 +3928,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="max-w-4xl mx-auto"
+              className={activeTab === 'admin' ? 'max-w-[1500px] mx-auto' : 'max-w-5xl mx-auto'}
             >
               <button
                 onClick={() => setActiveTab('home')}
@@ -4016,6 +4127,18 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
               className="space-y-8"
             >
               <ReputationSystem userProfile={userProfile} />
+            </motion.div>
+          )}
+
+          {activeTab === 'profile' && userProfile.role !== 'admin' && (
+            <motion.div
+              key="profile-tab"
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              className="space-y-8"
+            >
+              <ProfileSettingsPanel userProfile={userProfile} onProfileUpdate={onProfileUpdate} />
             </motion.div>
           )}
 
@@ -4435,7 +4558,7 @@ function MainApp({ isDarkMode, currentTheme, userProfile, notificationPrefs, onL
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="max-w-6xl mx-auto"
+              className="max-w-[1500px] mx-auto"
             >
               <AdminTrafficPanel socket={socket} />
             </motion.div>
