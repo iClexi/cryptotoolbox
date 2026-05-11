@@ -158,7 +158,7 @@ interface NotificationPrefs {
   verificationMatch: boolean;
 }
 
-type PublicView = 'landing' | 'auth' | 'terms' | 'reset';
+type PublicView = 'landing' | 'auth' | 'terms' | 'privacy' | 'reset';
 type AuthMode = 'login' | 'register';
 const BRAND_LOGO_SRC = '/logo.png';
 const MIN_SECURE_PIN_LENGTH = 6;
@@ -274,7 +274,7 @@ const AssignmentBriefPopup = ({ isOpen, onClose, isDarkMode }: { isOpen: boolean
   </AnimatePresence>
 );
 
-const PublicLanding = ({ onOpenAuth, onShowTerms }: { onOpenAuth: (mode: AuthMode) => void, onShowTerms: () => void }) => {
+const PublicLanding = ({ onOpenAuth, onShowTerms, onShowPrivacy }: { onOpenAuth: (mode: AuthMode) => void, onShowTerms: () => void, onShowPrivacy: () => void }) => {
   const previewApps = Object.values(APP_PREVIEW_DATA);
   const currentYear = new Date().getFullYear();
 
@@ -326,6 +326,9 @@ const PublicLanding = ({ onOpenAuth, onShowTerms }: { onOpenAuth: (mode: AuthMod
             </a>
             <button onClick={onShowTerms} className="hidden sm:inline-flex px-3 py-2 rounded-lg text-xs font-bold text-white/65 hover:text-white hover:bg-white/5 transition-colors">
               Terminos
+            </button>
+            <button onClick={onShowPrivacy} className="hidden md:inline-flex px-3 py-2 rounded-lg text-xs font-bold text-white/65 hover:text-white hover:bg-white/5 transition-colors">
+              Privacidad
             </button>
             <button onClick={() => onOpenAuth('login')} className="px-4 py-2 rounded-lg text-xs font-black border border-white/10 hover:bg-white/5 transition-colors">
               Login
@@ -557,6 +560,9 @@ const PublicLanding = ({ onOpenAuth, onShowTerms }: { onOpenAuth: (mode: AuthMod
             <button onClick={onShowTerms} className="px-3 py-2 rounded-lg text-white/55 hover:text-white hover:bg-white/5 transition-colors font-bold">
               Terminos
             </button>
+            <button onClick={onShowPrivacy} className="px-3 py-2 rounded-lg text-white/55 hover:text-white hover:bg-white/5 transition-colors font-bold">
+              Privacidad
+            </button>
             <button onClick={() => onOpenAuth('login')} className="px-3 py-2 rounded-lg text-white/55 hover:text-white hover:bg-white/5 transition-colors font-bold">
               Login
             </button>
@@ -570,46 +576,359 @@ const PublicLanding = ({ onOpenAuth, onShowTerms }: { onOpenAuth: (mode: AuthMod
   );
 };
 
-const TermsPage = ({ onBack, onOpenAuth }: { onBack: () => void, onOpenAuth: (mode: AuthMode) => void }) => (
+const TERMS_LAST_UPDATED = '10 de mayo de 2026';
+
+const TERMS_SECTIONS: Array<{ id: string, title: string, body: ReactNode }> = [
+  {
+    id: 'introduccion',
+    title: '1. Introduccion',
+    body: (
+      <>
+        <p>Bienvenido/a a <strong>CryptoToolbox</strong> (en adelante, "la Plataforma" o "el Servicio"), una herramienta educativa enfocada en verificacion de hashes (MD5, SHA1, SHA256), integridad de archivos, certificados digitales y practicas relacionadas con criptografia aplicada.</p>
+        <p>Al acceder, registrarte o utilizar cualquier funcionalidad declaras haber leido y aceptado estos Terminos y Condiciones (los "Terminos"). Si no estas de acuerdo con alguno de los puntos descritos, por favor abstente de usar el Servicio.</p>
+      </>
+    )
+  },
+  {
+    id: 'uso',
+    title: '2. Uso aceptable',
+    body: (
+      <ul className="list-disc pl-5 space-y-1.5">
+        <li>La Plataforma debe usarse para aprendizaje, comprobacion de integridad de archivos, documentacion tecnica y pruebas en entornos autorizados.</li>
+        <li>Queda prohibido emplear la herramienta para ocultar, distribuir o validar software malicioso, contenido ilegal o vulneraciones de derechos de terceros.</li>
+        <li>No esta permitido realizar ingenieria inversa, raspado masivo, ataques de fuerza bruta ni acceso no autorizado a la infraestructura.</li>
+      </ul>
+    )
+  },
+  {
+    id: 'cuentas',
+    title: '3. Cuentas y seguridad',
+    body: (
+      <>
+        <p>Cada usuario es responsable de proteger su nombre de usuario, PIN y sesion activa. No compartas credenciales; cierra sesion en equipos compartidos.</p>
+        <p>Cualquier actividad realizada bajo tu cuenta se considera autorizada por ti. Si detectas un acceso indebido, debes notificarnos inmediatamente.</p>
+      </>
+    )
+  },
+  {
+    id: 'datos',
+    title: '4. Datos que se registran',
+    body: (
+      <>
+        <p>Para operar el Servicio, CryptoToolbox almacena:</p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li>Datos de cuenta: nombre, apellido, usuario, correo, fecha de nacimiento, genero, PIN cifrado y semilla de avatar.</li>
+          <li>Actividad tecnica: hashes generados, archivos subidos para verificacion (los archivos no se conservan tras el calculo), mensajes en chats internos y entradas de wiki.</li>
+          <li>Datos del navegador: IP, agente de usuario, idioma, resolucion, zona horaria, pais y registros de inicio de sesion para fines de seguridad y telemetria educativa.</li>
+        </ul>
+      </>
+    )
+  },
+  {
+    id: 'hashes',
+    title: '5. Verificacion de hashes y certificados',
+    body: (
+      <p>Los hashes calculados sirven como referencia tecnica para verificar integridad. Antes de ejecutar archivos descargados de internet, compara siempre el hash contra la fuente oficial y revisa la cadena de certificacion. CryptoToolbox no garantiza que un archivo verificado este libre de malware.</p>
+    )
+  },
+  {
+    id: 'contenido',
+    title: '6. Contenido del usuario',
+    body: (
+      <p>El usuario es el unico responsable del contenido que publica en wiki, chats, perfil o cualquier formulario interno. Queda prohibido publicar contrasenas reales, llaves privadas, tokens, datos personales de terceros, material ofensivo, discriminatorio o ilegal.</p>
+    )
+  },
+  {
+    id: 'propiedad',
+    title: '7. Propiedad intelectual',
+    body: (
+      <p>El nombre CryptoToolbox, su logo, diseno e implementacion son propiedad del proyecto educativo iClexi. El usuario conserva los derechos sobre el contenido que publica, pero concede una licencia limitada y revocable para que el Servicio lo aloje y muestre con fines operativos.</p>
+    )
+  },
+  {
+    id: 'disponibilidad',
+    title: '8. Disponibilidad',
+    body: (
+      <p>El Servicio puede cambiar, reiniciarse o limitarse en cualquier momento por mantenimiento, seguridad, requisitos academicos o causas de fuerza mayor. No garantizamos disponibilidad continua ni respaldo permanente del contenido.</p>
+    )
+  },
+  {
+    id: 'responsabilidad',
+    title: '9. Limitacion de responsabilidad',
+    body: (
+      <p>CryptoToolbox se proporciona "tal cual", sin garantias explicitas o implicitas. En la maxima medida permitida por la ley, no asumimos responsabilidad por danos directos, indirectos o consecuentes derivados del uso de la herramienta.</p>
+    )
+  },
+  {
+    id: 'terceros',
+    title: '10. Servicios de terceros',
+    body: (
+      <p>La Plataforma puede integrar servicios externos (correo transaccional, analitica, IA generativa). Cada uno se rige por sus propios terminos; revisalos antes de aceptar.</p>
+    )
+  },
+  {
+    id: 'menores',
+    title: '11. Edad minima',
+    body: (
+      <p>El Servicio esta dirigido a usuarios mayores de 13 anos. Los menores deben contar con consentimiento de su tutor legal. Nos reservamos el derecho de eliminar cuentas que no cumplan este requisito.</p>
+    )
+  },
+  {
+    id: 'terminacion',
+    title: '12. Terminacion',
+    body: (
+      <p>Podemos suspender o cerrar cuentas que incumplan estos Terminos o presenten actividad fraudulenta. El usuario puede solicitar la eliminacion de su cuenta en cualquier momento.</p>
+    )
+  },
+  {
+    id: 'cambios',
+    title: '13. Cambios en los Terminos',
+    body: (
+      <p>Estos Terminos pueden actualizarse para reflejar cambios legales o tecnicos. Cuando los cambios sean materiales, se notificara mediante un aviso destacado dentro del Servicio. El uso continuado tras la entrada en vigor implica aceptacion.</p>
+    )
+  },
+  {
+    id: 'contacto',
+    title: '14. Contacto',
+    body: (
+      <p>Para consultas relacionadas con estos Terminos, escribe al equipo de iClexi a traves de los canales oficiales publicados en la Plataforma.</p>
+    )
+  }
+];
+
+const TermsPage = ({ onBack, onOpenAuth, onShowPrivacy }: { onBack: () => void, onOpenAuth: (mode: AuthMode) => void, onShowPrivacy: () => void }) => (
   <div className="min-h-screen bg-[#050505] text-white font-sans">
-    <header className="border-b border-white/10">
-      <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+    <a href="#contenido" className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-lg focus:bg-emerald-500 focus:px-4 focus:py-2 focus:text-sm focus:font-black focus:text-black">
+      Saltar al contenido
+    </a>
+    <header className="border-b border-white/10 print:hidden">
+      <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-2 flex-wrap">
         <button onClick={onBack} className="flex items-center gap-2 text-sm font-bold text-white/65 hover:text-white transition-colors">
           <ChevronRight className="w-4 h-4 rotate-180" />
           Volver
         </button>
-        <button onClick={() => onOpenAuth('register')} className="px-4 py-2 rounded-lg bg-emerald-500 text-black text-xs font-black hover:bg-emerald-400 transition-colors">
-          Crear cuenta
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => window.print()} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-black text-white/70 hover:bg-white/5 transition-colors">
+            Imprimir / PDF
+          </button>
+          <button onClick={onShowPrivacy} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-black text-white/70 hover:bg-white/5 transition-colors">
+            Privacidad
+          </button>
+          <button onClick={() => onOpenAuth('register')} className="px-4 py-2 rounded-lg bg-emerald-500 text-black text-xs font-black hover:bg-emerald-400 transition-colors">
+            Crear cuenta
+          </button>
+        </div>
       </div>
     </header>
 
-    <main className="max-w-5xl mx-auto px-6 py-12 space-y-8">
+    <main id="contenido" className="max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-12 space-y-8">
       <div className="space-y-4">
         <div className="w-12 h-12 rounded-lg bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center">
           <ShieldCheck className="w-6 h-6 text-emerald-400" />
         </div>
-        <h1 className="text-4xl sm:text-5xl font-black tracking-tight">Terminos y condiciones</h1>
+        <span className="inline-flex rounded-full bg-emerald-500/10 border border-emerald-500/25 px-3 py-1 text-[11px] font-black uppercase tracking-widest text-emerald-300">
+          Documento legal
+        </span>
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight">Terminos y Condiciones</h1>
+        <p className="text-sm text-white/55">Ultima actualizacion: {TERMS_LAST_UPDATED}</p>
         <p className="text-white/62 leading-relaxed max-w-3xl">
-          Estos terminos aplican al uso de CryptoToolbox como herramienta educativa para verificacion de hashes, integridad de archivos y practica de certificados digitales.
+          Estos terminos aplican al uso de CryptoToolbox como herramienta educativa para verificacion de hashes, integridad de archivos y practica de certificados digitales. Lee con atencion antes de crear una cuenta.
         </p>
       </div>
 
+      <nav aria-label="Indice" className="rounded-lg border border-white/10 bg-white/[0.02] p-4 sm:p-5 print:hidden">
+        <h2 className="text-[11px] font-black uppercase tracking-widest text-white/45 mb-3">Contenido</h2>
+        <ul className="grid gap-1 sm:grid-cols-2 text-sm">
+          {TERMS_SECTIONS.map(s => (
+            <li key={s.id}>
+              <a href={`#${s.id}`} className="block rounded px-2 py-1 text-white/70 hover:text-emerald-300 hover:bg-white/5 transition-colors">
+                {s.title}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
       <div className="grid gap-4">
-        {[
-          ['Uso permitido', 'La plataforma debe usarse para aprendizaje, comprobacion de integridad, documentacion tecnica y pruebas autorizadas. No debe emplearse para ocultar, distribuir o validar software malicioso.'],
-          ['Cuentas y seguridad', 'Cada usuario es responsable de su nombre de usuario y PIN. No compartas credenciales y cierra sesion cuando uses equipos compartidos.'],
-          ['Datos registrados', 'La aplicacion puede guardar usuarios, hashes generados, actividad tecnica, mensajes internos, IP, navegador, idioma, pantalla, zona horaria y pais cuando el proxy lo provee para seguridad y administracion.'],
-          ['Verificacion de hashes', 'Los hashes publicados sirven como referencia tecnica. Antes de ejecutar archivos descargados, compara la firma y valida tambien la fuente oficial.'],
-          ['Disponibilidad', 'El servicio puede cambiar, reiniciarse o limitarse por mantenimiento, seguridad o ajustes academicos del proyecto.'],
-          ['Privacidad', 'No publiques contrasenas reales, llaves privadas, tokens ni datos sensibles dentro de chats, wiki, nombres de archivo o campos de prueba.']
-        ].map(([title, body]) => (
-          <section key={title} className="border border-white/10 bg-white/[0.03] rounded-lg p-5">
-            <h2 className="text-lg font-black mb-2">{title}</h2>
-            <p className="text-sm text-white/62 leading-relaxed">{body}</p>
+        {TERMS_SECTIONS.map(s => (
+          <section key={s.id} id={s.id} className="scroll-mt-24 border border-white/10 bg-white/[0.03] rounded-lg p-5 sm:p-6">
+            <h2 className="text-lg sm:text-xl font-black mb-3">{s.title}</h2>
+            <div className="text-sm sm:text-[15px] text-white/65 leading-relaxed space-y-3">
+              {s.body}
+            </div>
           </section>
         ))}
       </div>
+
+      <footer className="border-t border-white/10 pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-white/45">
+        <p>(c) {new Date().getFullYear()} CryptoToolbox - iClexi</p>
+        <div className="flex items-center gap-3 print:hidden">
+          <button onClick={onShowPrivacy} className="hover:text-white transition-colors font-black">Politica de Privacidad</button>
+          <button onClick={() => onOpenAuth('register')} className="px-3 py-1.5 rounded-lg bg-emerald-500 text-black font-black hover:bg-emerald-400 transition-colors">
+            Crear cuenta
+          </button>
+        </div>
+      </footer>
+    </main>
+  </div>
+);
+
+const PRIVACY_SECTIONS: Array<{ id: string, title: string, body: ReactNode }> = [
+  {
+    id: 'responsable',
+    title: '1. Responsable',
+    body: <p>CryptoToolbox es operado por el proyecto educativo iClexi. Para ejercer cualquier derecho sobre tus datos, puedes contactarnos a traves de los canales oficiales publicados en la Plataforma.</p>
+  },
+  {
+    id: 'datos',
+    title: '2. Datos que recopilamos',
+    body: (
+      <ul className="list-disc pl-5 space-y-1.5">
+        <li>Datos de cuenta: usuario, correo, nombre, apellido, fecha de nacimiento, genero, PIN cifrado, semilla de avatar.</li>
+        <li>Actividad tecnica: hashes generados, mensajes en chats internos, contribuciones a la wiki.</li>
+        <li>Datos del navegador: IP, agente de usuario, idioma, resolucion, zona horaria, pais, sistema operativo, conexion, registros de inicio de sesion.</li>
+      </ul>
+    )
+  },
+  {
+    id: 'finalidades',
+    title: '3. Finalidades',
+    body: (
+      <ul className="list-disc pl-5 space-y-1.5">
+        <li>Prestar el Servicio (autenticacion, sesiones, panel del usuario).</li>
+        <li>Detectar abuso, fraude o accesos sospechosos.</li>
+        <li>Mostrar telemetria educativa al equipo de iClexi (panel admin).</li>
+        <li>Mejorar la herramienta con metricas agregadas.</li>
+      </ul>
+    )
+  },
+  {
+    id: 'base',
+    title: '4. Base legal',
+    body: <p>El tratamiento se apoya en la ejecucion del contrato (Terminos y Condiciones), en tu consentimiento al aceptarlos durante el registro, y en el interes legitimo de mantener la seguridad del Servicio.</p>
+  },
+  {
+    id: 'compartir',
+    title: '5. Con quien compartimos',
+    body: <p>No vendemos ni alquilamos tus datos. Solo se comparten con proveedores tecnologicos (hosting, correo, IA) bajo confidencialidad, o ante requerimiento legal valido.</p>
+  },
+  {
+    id: 'retencion',
+    title: '6. Conservacion',
+    body: <p>Los datos se conservan mientras tu cuenta este activa. Si solicitas eliminacion, los borraremos o anonimizaremos en un plazo razonable, salvo registros minimos exigidos por seguridad o ley.</p>
+  },
+  {
+    id: 'derechos',
+    title: '7. Tus derechos',
+    body: (
+      <ul className="list-disc pl-5 space-y-1.5">
+        <li>Acceso, rectificacion y supresion.</li>
+        <li>Oposicion al tratamiento basado en interes legitimo.</li>
+        <li>Portabilidad en formato estructurado.</li>
+        <li>Retirar tu consentimiento en cualquier momento.</li>
+      </ul>
+    )
+  },
+  {
+    id: 'seguridad',
+    title: '8. Seguridad',
+    body: <p>Aplicamos cifrado TLS, hashing de PIN, controles de acceso por rol, copias de seguridad y monitoreo. Ningun sistema es 100% invulnerable; usa contrasenas/PIN robustos y no compartas credenciales.</p>
+  },
+  {
+    id: 'cookies',
+    title: '9. Cookies',
+    body: <p>Usamos cookies estrictamente necesarias para la sesion. No se utilizan cookies de seguimiento publicitario de terceros.</p>
+  },
+  {
+    id: 'menores',
+    title: '10. Menores',
+    body: <p>El Servicio esta dirigido a mayores de 13 anos. Si descubrimos que recopilamos datos de un menor sin consentimiento adecuado, los eliminaremos.</p>
+  },
+  {
+    id: 'cambios',
+    title: '11. Cambios',
+    body: <p>Esta Politica puede actualizarse. Cuando los cambios sean materiales, lo notificaremos dentro de la Plataforma. La version vigente siempre esta disponible aqui.</p>
+  },
+  {
+    id: 'contacto',
+    title: '12. Contacto',
+    body: <p>Para consultas de privacidad o ejercicio de derechos, escribe al equipo de iClexi a traves de los canales oficiales.</p>
+  }
+];
+
+const PrivacyPage = ({ onBack, onOpenAuth, onShowTerms }: { onBack: () => void, onOpenAuth: (mode: AuthMode) => void, onShowTerms: () => void }) => (
+  <div className="min-h-screen bg-[#050505] text-white font-sans">
+    <a href="#contenido" className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-lg focus:bg-emerald-500 focus:px-4 focus:py-2 focus:text-sm focus:font-black focus:text-black">
+      Saltar al contenido
+    </a>
+    <header className="border-b border-white/10 print:hidden">
+      <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-2 flex-wrap">
+        <button onClick={onBack} className="flex items-center gap-2 text-sm font-bold text-white/65 hover:text-white transition-colors">
+          <ChevronRight className="w-4 h-4 rotate-180" />
+          Volver
+        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => window.print()} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-black text-white/70 hover:bg-white/5 transition-colors">
+            Imprimir / PDF
+          </button>
+          <button onClick={onShowTerms} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-black text-white/70 hover:bg-white/5 transition-colors">
+            Terminos
+          </button>
+          <button onClick={() => onOpenAuth('register')} className="px-4 py-2 rounded-lg bg-emerald-500 text-black text-xs font-black hover:bg-emerald-400 transition-colors">
+            Crear cuenta
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main id="contenido" className="max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-12 space-y-8">
+      <div className="space-y-4">
+        <div className="w-12 h-12 rounded-lg bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center">
+          <ShieldCheck className="w-6 h-6 text-emerald-400" />
+        </div>
+        <span className="inline-flex rounded-full bg-emerald-500/10 border border-emerald-500/25 px-3 py-1 text-[11px] font-black uppercase tracking-widest text-emerald-300">
+          Privacidad
+        </span>
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight">Politica de Privacidad</h1>
+        <p className="text-sm text-white/55">Ultima actualizacion: {TERMS_LAST_UPDATED}</p>
+        <p className="text-white/62 leading-relaxed max-w-3xl">
+          En CryptoToolbox respetamos tu privacidad. Esta politica explica que datos recopilamos, como los usamos y que derechos tienes sobre ellos.
+        </p>
+      </div>
+
+      <nav aria-label="Indice" className="rounded-lg border border-white/10 bg-white/[0.02] p-4 sm:p-5 print:hidden">
+        <h2 className="text-[11px] font-black uppercase tracking-widest text-white/45 mb-3">Contenido</h2>
+        <ul className="grid gap-1 sm:grid-cols-2 text-sm">
+          {PRIVACY_SECTIONS.map(s => (
+            <li key={s.id}>
+              <a href={`#${s.id}`} className="block rounded px-2 py-1 text-white/70 hover:text-emerald-300 hover:bg-white/5 transition-colors">
+                {s.title}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      <div className="grid gap-4">
+        {PRIVACY_SECTIONS.map(s => (
+          <section key={s.id} id={s.id} className="scroll-mt-24 border border-white/10 bg-white/[0.03] rounded-lg p-5 sm:p-6">
+            <h2 className="text-lg sm:text-xl font-black mb-3">{s.title}</h2>
+            <div className="text-sm sm:text-[15px] text-white/65 leading-relaxed space-y-3">
+              {s.body}
+            </div>
+          </section>
+        ))}
+      </div>
+
+      <footer className="border-t border-white/10 pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-white/45">
+        <p>(c) {new Date().getFullYear()} CryptoToolbox - iClexi</p>
+        <div className="flex items-center gap-3 print:hidden">
+          <button onClick={onShowTerms} className="hover:text-white transition-colors font-black">Terminos y Condiciones</button>
+          <button onClick={() => onOpenAuth('register')} className="px-3 py-1.5 rounded-lg bg-emerald-500 text-black font-black hover:bg-emerald-400 transition-colors">
+            Crear cuenta
+          </button>
+        </div>
+      </footer>
     </main>
   </div>
 );
@@ -1015,10 +1334,15 @@ const AuthPortal = ({ onSelect, onBackToHome, onShowTerms, initialMode }: {
                   <label className="flex items-start gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-4">
                     <input type="checkbox" checked={termsAccepted} onChange={e => setTermsAccepted(e.target.checked)} className="mt-1 accent-emerald-500" disabled={loading} required />
                     <span className="text-sm text-white/70 leading-relaxed">
-                      Acepto los terminos y condiciones de CryptoToolbox.
-                      <button type="button" onClick={onShowTerms} className="ml-1 text-emerald-300 font-black hover:text-emerald-200">
-                        Leer terminos
+                      Acepto los{' '}
+                      <button type="button" onClick={onShowTerms} className="text-emerald-300 font-black hover:text-emerald-200">
+                        Terminos y Condiciones
                       </button>
+                      {' '}y la{' '}
+                      <a href="/privacidad" target="_blank" rel="noopener noreferrer" className="text-emerald-300 font-black hover:text-emerald-200">
+                        Politica de Privacidad
+                      </a>
+                      {' '}de CryptoToolbox.
                     </span>
                   </label>
                 </div>
@@ -2421,7 +2745,21 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [currentThemeId, setCurrentThemeId] = useState('dark');
-  const [publicView, setPublicView] = useState<PublicView>('landing');
+  const [publicView, setPublicView] = useState<PublicView>(() => {
+    if (typeof window === 'undefined') return 'landing';
+    const p = window.location.pathname;
+    if (p.startsWith('/terminos')) return 'terms';
+    if (p.startsWith('/privacidad')) return 'privacy';
+    return 'landing';
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const target = publicView === 'terms' ? '/terminos' : publicView === 'privacy' ? '/privacidad' : '/';
+    if (window.location.pathname !== target) {
+      window.history.replaceState({}, '', target);
+    }
+  }, [publicView]);
   const [initialAuthMode, setInitialAuthMode] = useState<AuthMode>('login');
   const [resetToken, setResetToken] = useState('');
   const [showAssignmentPopup, setShowAssignmentPopup] = useState(false);
@@ -2559,6 +2897,13 @@ export default function App() {
           <TermsPage
             onBack={() => setPublicView('landing')}
             onOpenAuth={openAuth}
+            onShowPrivacy={() => setPublicView('privacy')}
+          />
+        ) : publicView === 'privacy' ? (
+          <PrivacyPage
+            onBack={() => setPublicView('landing')}
+            onOpenAuth={openAuth}
+            onShowTerms={() => setPublicView('terms')}
           />
         ) : publicView === 'auth' ? (
           <AuthPortal
@@ -2576,6 +2921,7 @@ export default function App() {
           <PublicLanding
             onOpenAuth={openAuth}
             onShowTerms={() => setPublicView('terms')}
+            onShowPrivacy={() => setPublicView('privacy')}
           />
         )
       ) : (

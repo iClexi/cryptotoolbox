@@ -6,6 +6,37 @@
     <meta name="description" content="CryptoToolbox verifica integridad de archivos con MD5, SHA1 y SHA256 sobre HTTPS." />
     <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
+    <link rel="canonical" href="https://cryptotoolbox.iclexi.tech/" />
+    <link rel="terms-of-service" href="/terminos" />
+    <link rel="privacy-policy" href="/privacidad" />
+    <link rel="license" href="/terminos" />
+    <meta name="terms-of-service" content="https://cryptotoolbox.iclexi.tech/terminos" />
+    <meta name="privacy-policy" content="https://cryptotoolbox.iclexi.tech/privacidad" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="CryptoToolbox" />
+    <meta property="og:title" content="CryptoToolbox - Verificacion de hashes e integridad" />
+    <meta property="og:description" content="Herramienta educativa para MD5, SHA1, SHA256 y practica de certificados digitales." />
+    <meta property="og:url" content="https://cryptotoolbox.iclexi.tech/" />
+    <meta property="og:locale" content="es_DO" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="CryptoToolbox" />
+    <meta name="twitter:description" content="Verificacion de hashes e integridad de archivos." />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "CryptoToolbox",
+        "url": "https://cryptotoolbox.iclexi.tech/",
+        "applicationCategory": "SecurityApplication",
+        "operatingSystem": "Web",
+        "inLanguage": "es",
+        "termsOfService": "https://cryptotoolbox.iclexi.tech/terminos",
+        "privacyPolicy": "https://cryptotoolbox.iclexi.tech/privacidad"
+      }
+    </script>
+
     <title>CryptoToolbox</title>
     <style>
       #html-brand-header {
@@ -44,6 +75,19 @@
         font-size: 11px;
         color: rgba(255, 255, 255, 0.48);
       }
+
+      @media print {
+        body { background: #fff !important; color: #111 !important; }
+        #html-brand-header { display: none !important; }
+        header, nav, footer, .print\\:hidden, [aria-hidden="true"] { display: none !important; }
+        main, main * {
+          background: transparent !important;
+          color: #111 !important;
+          border-color: #d1d5db !important;
+        }
+        a { color: #111 !important; text-decoration: underline !important; }
+        section { page-break-inside: avoid; }
+      }
     </style>
   </head>
   <body>
@@ -58,4 +102,3 @@
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

@@ -1209,12 +1209,35 @@ async function startServer() {
   }));
 
   app.get("/robots.txt", (_req, res) => {
-    res.type("text/plain").send("User-agent: *\nDisallow:\n");
+    const appUrl = getPublicAppUrl();
+    res.type("text/plain").send(
+      `User-agent: *\nAllow: /\nAllow: /terminos\nAllow: /privacidad\nDisallow: /api/\nSitemap: ${appUrl}/sitemap.xml\n`,
+    );
   });
 
   app.get("/sitemap.xml", (_req, res) => {
     const appUrl = getPublicAppUrl();
-    res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${appUrl}/</loc></url></urlset>`);
+    const urls = ["/", "/terminos", "/privacidad"];
+    const body = urls
+      .map((u) => `<url><loc>${appUrl}${u}</loc></url>`)
+      .join("");
+    res.type("application/xml").send(
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${body}</urlset>`,
+    );
+  });
+
+  app.get("/.well-known/security.txt", (_req, res) => {
+    const appUrl = getPublicAppUrl();
+    res.type("text/plain").send(
+      [
+        "Contact: mailto:security@iclexi.tech",
+        "Expires: 2027-05-10T00:00:00.000Z",
+        "Preferred-Languages: es, en",
+        `Canonical: ${appUrl}/.well-known/security.txt`,
+        `Policy: ${appUrl}/terminos`,
+        "",
+      ].join("\n"),
+    );
   });
 
   app.get("/api/session", asyncRoute(async (req, res) => {
