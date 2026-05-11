@@ -2886,12 +2886,19 @@ export default function App() {
 
   return (
     <div className={isDarkMode ? 'dark' : ''} style={{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', minHeight: '100vh' }}>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded focus:bg-emerald-600 focus:px-3 focus:py-2 focus:text-white"
+      >
+        Saltar al contenido
+      </a>
       <Toaster position="top-right" theme={isDarkMode ? 'dark' : 'light'} />
       <AssignmentBriefPopup
         isOpen={showAssignmentPopup && Boolean(userProfile)}
         onClose={handleCloseAssignmentPopup}
         isDarkMode={isDarkMode}
       />
+      <span id="main-content" tabIndex={-1} className="sr-only" aria-hidden="true" />
       {!userProfile ? (
         publicView === 'terms' ? (
           <TermsPage

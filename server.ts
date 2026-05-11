@@ -1070,7 +1070,7 @@ function shouldTrackRequest(req: Request): boolean {
   if (pathName.startsWith("/socket.io")) return false;
   if (pathName.startsWith("/assets/") || pathName.startsWith("/logo.png") || pathName.startsWith("/favicon")) return false;
   if (pathName === "/api/telemetry/visit" || pathName.startsWith("/api/admin/traffic")) return false;
-  if (pathName === "/robots.txt" || pathName === "/sitemap.xml") return false;
+  if (pathName === "/robots.txt" || pathName === "/sitemap.xml" || pathName === "/manifest.webmanifest") return false;
   return req.method === "GET" || req.method === "POST";
 }
 
@@ -1224,6 +1224,24 @@ async function startServer() {
     res.type("application/xml").send(
       `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${body}</urlset>`,
     );
+  });
+
+  app.get("/manifest.webmanifest", (_req, res) => {
+    res.type("application/manifest+json").send(JSON.stringify({
+      name: "CryptoToolbox",
+      short_name: "CryptoToolbox",
+      description: "Verificación de hashes e integridad de archivos.",
+      start_url: "/",
+      scope: "/",
+      display: "standalone",
+      background_color: "#050505",
+      theme_color: "#050505",
+      lang: "es",
+      orientation: "portrait-primary",
+      icons: [
+        { src: "/logo.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
+      ],
+    }));
   });
 
   app.get("/.well-known/security.txt", (_req, res) => {
