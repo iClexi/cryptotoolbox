@@ -727,8 +727,8 @@ function configureSecurity(app: express.Express) {
         "img-src": ["'self'", "data:", "https:"],
         "font-src": ["'self'", "data:"],
         "connect-src": isProduction
-          ? ["'self'", "https://www.nitrxgen.net", "https://md5.gromweb.com", "https://sha1.gromweb.com", "wss:"]
-          : ["'self'", "https://www.nitrxgen.net", "https://md5.gromweb.com", "https://sha1.gromweb.com", "ws:", "wss:"],
+          ? ["'self'", "https://www.nitrxgen.net", "https://md5.gromweb.com", "https://sha1.gromweb.com", "https://*.ingest.us.sentry.io", "https://*.ingest.sentry.io", "wss:"]
+          : ["'self'", "https://www.nitrxgen.net", "https://md5.gromweb.com", "https://sha1.gromweb.com", "https://*.ingest.us.sentry.io", "https://*.ingest.sentry.io", "ws:", "wss:"],
         "media-src": ["'self'"],
         "manifest-src": ["'self'"],
         "upgrade-insecure-requests": httpsHardeningEnabled ? [] : null,
